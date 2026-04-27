@@ -1,0 +1,830 @@
+import { onCall, HttpsError } from 'firebase-functions/v2/https';
+import { onSchedule } from 'firebase-functions/v2/scheduler';
+import { onDocumentCreated, onDocumentUpdated } from 'firebase-functions/v2/firestore';
+import { defineSecret } from 'firebase-functions/params';
+import * as admin from 'firebase-admin';
+import { createHash, randomInt } from 'crypto';
+import { Resend } from 'resend';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const twilio = require('twilio');
+
+admin.initializeApp();
+const db = admin.firestore();
+
+const RESEND_API_KEY = defineSecret('RESEND_API_KEY');
+const EMAIL_FROM = defineSecret('EMAIL_FROM');
+const TWILIO_ACCOUNT_SID = defineSecret('TWILIO_ACCOUNT_SID');
+const TWILIO_AUTH_TOKEN = defineSecret('TWILIO_AUTH_TOKEN');
+const TWILIO_FROM_NUMBER = defineSecret('TWILIO_FROM_NUMBER');
+const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
+
+const CODE_TTL_MS = 10 * 60 * 1000;
+const RESEND_COOLDOWN_MS = 60 * 1000;
+const MAX_ATTEMPTS = 5;
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
+
+export const sendEmailChangeCode = onCall(
+  { region: 'us-central1', secrets: [RESEND_API_KEY, EMAIL_FROM] },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError('unauthenticated', 'ログインが必要です');
+
+    const newEmail = String(request.data?.newEmail ?? '').trim().toLowerCase();
+    if (!EMAIL_RE.test(newEmail)) {
+      throw new HttpsError('invalid-argument', '有効なメールアドレスを入力してください');
+    }
+
+    const userRecord = await admin.auth().getUser(uid);
+    if (userRecord.email?.toLowerCase() === newEmail) {
+      throw new HttpsError('already-exists', '現在と同じメールアドレスです');
+    }
+
+    try {
+      await admin.auth().getUserByEmail(newEmail);
+      throw new HttpsError('already-exists', 'このメールアドレスは既に使用されています');
+    } catch (e: any) {
+      if (e instanceof HttpsError) throw e;
+      if (e?.code !== 'auth/user-not-found') {
+        throw new HttpsError('internal', 'メールアドレスの確認に失敗しました');
+      }
+    }
+
+    const docRef = db.collection('emailChangeCodes').doc(uid);
+    const existing = await docRef.get();
+    if (existing.exists) {
+      const last = existing.data()?.createdAt?.toMillis?.() ?? 0;
+      if (Date.now() - last < RESEND_COOLDOWN_MS) {
+        throw new HttpsError('resource-exhausted', '再送信は1分後にお試しください');
+      }
+    }
+
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+
+    await docRef.set({
+      newEmail,
+      codeHash: sha256(code),
+      attempts: 0,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      expiresAt: admin.firestore.Timestamp.fromMillis(Date.now() + CODE_TTL_MS),
+    });
+
+    const resend = new Resend(RESEND_API_KEY.value());
+    const { error } = await resend.emails.send({
+      from: EMAIL_FROM.value(),
+      to: newEmail,
+      subject: 'huuwaメールアドレス変更の認証コード',
+      text: `huuwaの認証コードは ${code} です。\n\n10分以内にアプリで入力してください。\n心当たりがない場合はこのメールを無視してください。`,
+      html: `<p>huuwaの認証コードは <strong style="font-size:20px;letter-spacing:2px">${code}</strong> です。</p><p>10分以内にアプリで入力してください。</p><p style="color:#888;font-size:12px">心当たりがない場合はこのメールを無視してください。</p>`,
+    });
+
+    if (error) {
+      await docRef.delete().catch(() => {});
+      throw new HttpsError('internal', 'メール送信に失敗しました');
+    }
+
+    return { ok: true };
+  },
+);
+
+export const verifyEmailChangeCode = onCall(
+  { region: 'us-central1' },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError('unauthenticated', 'ログインが必要です');
+
+    const code = String(request.data?.code ?? '').trim();
+    if (!/^\d{6}$/.test(code)) {
+      throw new HttpsError('invalid-argument', '6桁のコードを入力してください');
+    }
+
+    const docRef = db.collection('emailChangeCodes').doc(uid);
+    const snap = await docRef.get();
+    if (!snap.exists) {
+      throw new HttpsError('not-found', '認証コードが見つかりません。再送信してください');
+    }
+
+    const data = snap.data()!;
+    const expiresAt: admin.firestore.Timestamp = data.expiresAt;
+    if (expiresAt.toMillis() < Date.now()) {
+      await docRef.delete().catch(() => {});
+      throw new HttpsError('deadline-exceeded', '認証コードの有効期限が切れました');
+    }
+
+    const attempts = (data.attempts ?? 0) as number;
+    if (attempts >= MAX_ATTEMPTS) {
+      await docRef.delete().catch(() => {});
+      throw new HttpsError('resource-exhausted', '試行回数の上限に達しました。再送信してください');
+    }
+
+    if (sha256(code) !== data.codeHash) {
+      await docRef.update({ attempts: attempts + 1 });
+      throw new HttpsError('permission-denied', '認証コードが正しくありません');
+    }
+
+    const newEmail = data.newEmail as string;
+    await admin.auth().updateUser(uid, { email: newEmail, emailVerified: true });
+    await db.collection('userPrivate').doc(uid).set({
+      email: newEmail,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true }).catch(() => {});
+    await db.collection('users').doc(uid).update({
+      email: admin.firestore.FieldValue.delete(),
+    }).catch(() => {});
+    await docRef.delete().catch(() => {});
+
+    return { ok: true, email: newEmail };
+  },
+);
+
+// ─── Password Reset (code-based) ───
+
+export const sendPasswordResetCode = onCall(
+  { region: 'us-central1', secrets: [RESEND_API_KEY, EMAIL_FROM] },
+  async (request) => {
+    const email = String(request.data?.email ?? '').trim().toLowerCase();
+    if (!EMAIL_RE.test(email)) {
+      throw new HttpsError('invalid-argument', '有効なメールアドレスを入力してください');
+    }
+
+    let userRecord;
+    try {
+      userRecord = await admin.auth().getUserByEmail(email);
+    } catch (e: any) {
+      if (e?.code === 'auth/user-not-found') {
+        // Don't leak whether the email exists; pretend success
+        return { ok: true };
+      }
+      throw new HttpsError('internal', 'エラーが発生しました');
+    }
+
+    const docRef = db.collection('passwordResetCodes').doc(userRecord.uid);
+    const existing = await docRef.get();
+    if (existing.exists) {
+      const last = existing.data()?.createdAt?.toMillis?.() ?? 0;
+      if (Date.now() - last < RESEND_COOLDOWN_MS) {
+        throw new HttpsError('resource-exhausted', '再送信は1分後にお試しください');
+      }
+    }
+
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+
+    await docRef.set({
+      email,
+      codeHash: sha256(code),
+      attempts: 0,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      expiresAt: admin.firestore.Timestamp.fromMillis(Date.now() + CODE_TTL_MS),
+    });
+
+    const resend = new Resend(RESEND_API_KEY.value());
+    const { error } = await resend.emails.send({
+      from: EMAIL_FROM.value(),
+      to: email,
+      subject: 'huuwa パスワードリセットの認証コード',
+      text: `huuwaのパスワードリセット用コードは ${code} です。\n\n10分以内にアプリで入力してください。\n心当たりがない場合はこのメールを無視してください。`,
+      html: `<p>huuwaのパスワードリセット用コードは <strong style="font-size:20px;letter-spacing:2px">${code}</strong> です。</p><p>10分以内にアプリで入力してください。</p><p style="color:#888;font-size:12px">心当たりがない場合はこのメールを無視してください。</p>`,
+    });
+
+    if (error) {
+      await docRef.delete().catch(() => {});
+      throw new HttpsError('internal', 'メール送信に失敗しました');
+    }
+
+    return { ok: true };
+  },
+);
+
+export const verifyPasswordResetCode = onCall(
+  { region: 'us-central1' },
+  async (request) => {
+    const email = String(request.data?.email ?? '').trim().toLowerCase();
+    const code = String(request.data?.code ?? '').trim();
+    const newPassword = String(request.data?.newPassword ?? '');
+
+    if (!EMAIL_RE.test(email)) {
+      throw new HttpsError('invalid-argument', '無効なメールアドレスです');
+    }
+    if (!/^\d{6}$/.test(code)) {
+      throw new HttpsError('invalid-argument', '6桁のコードを入力してください');
+    }
+    if (newPassword.length < 6) {
+      throw new HttpsError('invalid-argument', 'パスワードは6文字以上で入力してください');
+    }
+
+    let userRecord;
+    try {
+      userRecord = await admin.auth().getUserByEmail(email);
+    } catch {
+      throw new HttpsError('not-found', '認証コードが正しくありません');
+    }
+
+    const docRef = db.collection('passwordResetCodes').doc(userRecord.uid);
+    const snap = await docRef.get();
+    if (!snap.exists) {
+      throw new HttpsError('not-found', '認証コードが見つかりません。再送信してください');
+    }
+
+    const data = snap.data()!;
+    const expiresAt: admin.firestore.Timestamp = data.expiresAt;
+    if (expiresAt.toMillis() < Date.now()) {
+      await docRef.delete().catch(() => {});
+      throw new HttpsError('deadline-exceeded', '認証コードの有効期限が切れました');
+    }
+
+    const attempts = (data.attempts ?? 0) as number;
+    if (attempts >= MAX_ATTEMPTS) {
+      await docRef.delete().catch(() => {});
+      throw new HttpsError('resource-exhausted', '試行回数の上限に達しました。再送信してください');
+    }
+
+    if (sha256(code) !== data.codeHash) {
+      await docRef.update({ attempts: attempts + 1 });
+      throw new HttpsError('permission-denied', '認証コードが正しくありません');
+    }
+
+    await admin.auth().updateUser(userRecord.uid, { password: newPassword });
+    await docRef.delete().catch(() => {});
+
+    return { ok: true };
+  },
+);
+
+// ─── Phone number sign-in (via Twilio + custom tokens) ───
+
+const PHONE_RE = /^\+[1-9]\d{6,14}$/; // E.164
+
+export const sendPhoneCode = onCall(
+  { region: 'us-central1', secrets: [TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER] },
+  async (request) => {
+    const phone = String(request.data?.phone ?? '').trim();
+    if (!PHONE_RE.test(phone)) {
+      throw new HttpsError('invalid-argument', '有効な電話番号を国際表記で入力してください (例: +818012345678)');
+    }
+
+    const docId = sha256(phone);
+    const docRef = db.collection('phoneAuthCodes').doc(docId);
+    const existing = await docRef.get();
+    if (existing.exists) {
+      const last = existing.data()?.createdAt?.toMillis?.() ?? 0;
+      if (Date.now() - last < RESEND_COOLDOWN_MS) {
+        throw new HttpsError('resource-exhausted', '再送信は1分後にお試しください');
+      }
+    }
+
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+
+    await docRef.set({
+      phone,
+      codeHash: sha256(code),
+      attempts: 0,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      expiresAt: admin.firestore.Timestamp.fromMillis(Date.now() + CODE_TTL_MS),
+    });
+
+    const client = twilio(TWILIO_ACCOUNT_SID.value(), TWILIO_AUTH_TOKEN.value());
+    try {
+      await client.messages.create({
+        from: TWILIO_FROM_NUMBER.value(),
+        to: phone,
+        body: `huuwa 認証コード: ${code}\n10分以内にアプリで入力してください。`,
+      });
+    } catch (e) {
+      await docRef.delete().catch(() => {});
+      console.error('[sendPhoneCode] Twilio error:', e);
+      throw new HttpsError('internal', 'SMSの送信に失敗しました');
+    }
+
+    return { ok: true };
+  },
+);
+
+export const verifyPhoneCode = onCall(
+  { region: 'us-central1' },
+  async (request) => {
+    const phone = String(request.data?.phone ?? '').trim();
+    const code = String(request.data?.code ?? '').trim();
+    if (!PHONE_RE.test(phone)) {
+      throw new HttpsError('invalid-argument', '無効な電話番号です');
+    }
+    if (!/^\d{6}$/.test(code)) {
+      throw new HttpsError('invalid-argument', '6桁のコードを入力してください');
+    }
+
+    const docRef = db.collection('phoneAuthCodes').doc(sha256(phone));
+    const snap = await docRef.get();
+    if (!snap.exists) {
+      throw new HttpsError('not-found', '認証コードが見つかりません。再送信してください');
+    }
+
+    const data = snap.data()!;
+    const expiresAt: admin.firestore.Timestamp = data.expiresAt;
+    if (expiresAt.toMillis() < Date.now()) {
+      await docRef.delete().catch(() => {});
+      throw new HttpsError('deadline-exceeded', '認証コードの有効期限が切れました');
+    }
+
+    const attempts = (data.attempts ?? 0) as number;
+    if (attempts >= MAX_ATTEMPTS) {
+      await docRef.delete().catch(() => {});
+      throw new HttpsError('resource-exhausted', '試行回数の上限に達しました。再送信してください');
+    }
+
+    if (sha256(code) !== data.codeHash) {
+      await docRef.update({ attempts: attempts + 1 });
+      throw new HttpsError('permission-denied', '認証コードが正しくありません');
+    }
+
+    // Find or create user with this phone number
+    let uid: string;
+    try {
+      const existing = await admin.auth().getUserByPhoneNumber(phone);
+      uid = existing.uid;
+    } catch (e: any) {
+      if (e?.code === 'auth/user-not-found') {
+        const created = await admin.auth().createUser({ phoneNumber: phone });
+        uid = created.uid;
+      } else {
+        throw new HttpsError('internal', 'ユーザー情報の取得に失敗しました');
+      }
+    }
+
+    await docRef.delete().catch(() => {});
+    const customToken = await admin.auth().createCustomToken(uid);
+    return { ok: true, customToken, uid };
+  },
+);
+
+// ─── Scheduled deletion of accounts disabled for 30+ days ───
+
+const ACCOUNT_DELETION_GRACE_DAYS = 30;
+
+export const purgeDisabledAccounts = onSchedule(
+  { region: 'us-central1', schedule: 'every day 03:00', timeZone: 'Asia/Tokyo' },
+  async () => {
+    const cutoff = admin.firestore.Timestamp.fromMillis(
+      Date.now() - ACCOUNT_DELETION_GRACE_DAYS * 24 * 60 * 60 * 1000,
+    );
+    const snap = await db
+      .collection('users')
+      .where('disabled', '==', true)
+      .where('disabledAt', '<=', cutoff)
+      .limit(100)
+      .get();
+
+    for (const doc of snap.docs) {
+      const uid = doc.id;
+      try {
+        await admin.auth().deleteUser(uid);
+      } catch (e: any) {
+        if (e?.code !== 'auth/user-not-found') {
+          console.error(`[purgeDisabledAccounts] auth delete failed for ${uid}:`, e);
+          continue;
+        }
+      }
+      try {
+        await doc.ref.delete();
+      } catch (e) {
+        console.error(`[purgeDisabledAccounts] firestore delete failed for ${uid}:`, e);
+      }
+    }
+    console.log(`[purgeDisabledAccounts] purged ${snap.size} accounts`);
+  },
+);
+
+// ─── Automated content moderation via Gemini 2.0 Flash ───
+
+type ModerationResult = {
+  flagged: boolean;
+  categories: string[];
+  severity: 'low' | 'medium' | 'high';
+  reason?: string;
+};
+
+const MODERATION_PROMPT = `あなたはSNSの投稿モデレーターです。以下の投稿内容を評価してください。
+
+判定カテゴリー:
+- scam: 詐欺・投資勧誘・怪しいリンク・マルチ商法・偽ブランド販売
+- sexual: 性的・アダルト・ポルノ
+- violence: 暴力・殺害の示唆・武器販売
+- hate: 差別・ヘイトスピーチ・特定個人への誹謗中傷
+- self_harm: 自傷・自殺の助長
+- illegal: 違法薬物・違法行為の勧誘
+- spam: 無意味な広告の繰り返し
+
+必ず以下のJSON形式のみで回答してください(説明文不要):
+{
+  "flagged": true/false,
+  "categories": ["scam","sexual",...],
+  "severity": "low" | "medium" | "high",
+  "reason": "短い理由(任意)"
+}
+
+severity基準:
+- high: 削除対象(性的・違法・詐欺・重度ヘイト)
+- medium: 警告対象
+- low: 軽微 or 問題なし
+
+投稿内容:
+"""
+{CONTENT}
+"""`;
+
+async function moderateText(content: string): Promise<ModerationResult | null> {
+  if (!content || content.trim().length === 0) return null;
+  try {
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY.value());
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+    const prompt = MODERATION_PROMPT.replace('{CONTENT}', content.slice(0, 2000));
+    const result = await model.generateContent(prompt);
+    const text = result.response.text();
+    // Extract JSON (Gemini sometimes wraps in ```json)
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    const parsed = JSON.parse(jsonMatch[0]) as ModerationResult;
+    return parsed;
+  } catch (e) {
+    console.error('[moderateText] error:', e);
+    return null;
+  }
+}
+
+export const moderateTweet = onDocumentCreated(
+  {
+    region: 'us-central1',
+    document: 'tweets/{tweetId}',
+    secrets: [GEMINI_API_KEY],
+  },
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+    const data = snap.data();
+    const content: string = data?.content ?? '';
+    if (!content || content.length < 3) return;
+
+    const result = await moderateText(content);
+    if (!result || !result.flagged) return;
+
+    console.log(`[moderateTweet] Flagged tweet ${event.params.tweetId}:`, result);
+
+    if (result.severity === 'high') {
+      // Delete the tweet
+      await snap.ref.delete().catch(() => {});
+      // Notify the author
+      if (data?.authorUid) {
+        await db.collection('notifications').add({
+          type: 'moderation',
+          recipientUid: data.authorUid,
+          actor: { uid: 'system', displayName: 'huuwa', username: 'huuwa', avatarUrl: null },
+          actorUid: 'system',
+          targetId: event.params.tweetId,
+          message: `投稿がガイドライン違反(${result.categories.join(', ')})で自動削除されました。`,
+          read: false,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        }).catch(() => {});
+      }
+    } else if (result.severity === 'medium') {
+      // Flag for review
+      await snap.ref.update({
+        moderationFlagged: true,
+        moderationCategories: result.categories,
+        moderationReason: result.reason ?? null,
+      }).catch(() => {});
+    }
+  },
+);
+
+export const moderateThread = onDocumentCreated(
+  {
+    region: 'us-central1',
+    document: 'threads/{threadId}',
+    secrets: [GEMINI_API_KEY],
+  },
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+    const data = snap.data();
+    const title: string = data?.title ?? '';
+    if (!title || title.length < 3) return;
+
+    const result = await moderateText(title);
+    if (!result || !result.flagged) return;
+
+    console.log(`[moderateThread] Flagged thread ${event.params.threadId}:`, result);
+
+    if (result.severity === 'high') {
+      await snap.ref.delete().catch(() => {});
+      if (data?.authorUid) {
+        await db.collection('notifications').add({
+          type: 'moderation',
+          recipientUid: data.authorUid,
+          actor: { uid: 'system', displayName: 'huuwa', username: 'huuwa', avatarUrl: null },
+          actorUid: 'system',
+          targetId: event.params.threadId,
+          message: `スレッドがガイドライン違反(${result.categories.join(', ')})で自動削除されました。`,
+          read: false,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        }).catch(() => {});
+      }
+    } else if (result.severity === 'medium') {
+      await snap.ref.update({
+        moderationFlagged: true,
+        moderationCategories: result.categories,
+        moderationReason: result.reason ?? null,
+      }).catch(() => {});
+    }
+  },
+);
+
+
+
+// ─── Propagate user.isPrivate to their tweets / threads / shorts ───
+
+async function bulkSetPrivacy(
+  collection: "tweets" | "threads" | "shorts",
+  authorUid: string,
+  isPrivate: boolean,
+): Promise<number> {
+  const PAGE = 400;
+  let updated = 0;
+  let lastSnap: FirebaseFirestore.DocumentSnapshot | null = null;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    let q = db
+      .collection(collection)
+      .where("authorUid", "==", authorUid)
+      .limit(PAGE);
+    if (lastSnap) q = q.startAfter(lastSnap);
+    const snap = await q.get();
+    if (snap.empty) break;
+    const batch = db.batch();
+    snap.docs.forEach((d) => batch.update(d.ref, { authorIsPrivate: isPrivate }));
+    await batch.commit();
+    updated += snap.size;
+    if (snap.size < PAGE) break;
+    lastSnap = snap.docs[snap.size - 1];
+  }
+  return updated;
+}
+
+export const propagatePrivacyChange = onDocumentUpdated(
+  { region: "us-central1", document: "users/{uid}" },
+  async (event) => {
+    const before = event.data?.before.data();
+    const after = event.data?.after.data();
+    if (!before || !after) return;
+    const wasPrivate = before.isPrivate === true;
+    const nowPrivate = after.isPrivate === true;
+    if (wasPrivate === nowPrivate) return;
+
+    const uid = event.params.uid;
+    const [t, th, s] = await Promise.all([
+      bulkSetPrivacy("tweets", uid, nowPrivate),
+      bulkSetPrivacy("threads", uid, nowPrivate),
+      bulkSetPrivacy("shorts", uid, nowPrivate),
+    ]);
+    console.log(
+      `[propagatePrivacyChange] ${uid} → isPrivate=${nowPrivate}; updated tweets=${t}, threads=${th}, shorts=${s}`,
+    );
+  },
+);
+
+
+// ─── Rate limiting on content creation ───
+// Lightweight per-user, per-collection rate limiter using a Firestore counter doc.
+// Deletes the offending document if the user exceeds their hourly or daily quota.
+
+interface RateLimits {
+  hourly: number;
+  daily: number;
+}
+
+const RATE_LIMITS: Record<string, RateLimits> = {
+  tweet: { hourly: 30, daily: 200 },
+  thread: { hourly: 10, daily: 30 },
+  openchat: { hourly: 5, daily: 15 },
+  reply: { hourly: 60, daily: 400 },
+};
+
+async function checkAndIncrementLimit(
+  uid: string,
+  kind: keyof typeof RATE_LIMITS,
+): Promise<{ ok: true } | { ok: false; reason: 'hourly' | 'daily' }> {
+  const limits = RATE_LIMITS[kind];
+  const ref = db.collection('rateLimits').doc(`${uid}_${kind}`);
+  const now = Date.now();
+  const HOUR = 60 * 60 * 1000;
+  const DAY = 24 * HOUR;
+
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const data = snap.exists ? snap.data()! : null;
+
+    let hourlyCount = (data?.hourlyCount ?? 0) as number;
+    let hourlyStart = (data?.hourlyStart?.toMillis?.() ?? 0) as number;
+    let dailyCount = (data?.dailyCount ?? 0) as number;
+    let dailyStart = (data?.dailyStart?.toMillis?.() ?? 0) as number;
+
+    if (now - hourlyStart > HOUR) {
+      hourlyCount = 0;
+      hourlyStart = now;
+    }
+    if (now - dailyStart > DAY) {
+      dailyCount = 0;
+      dailyStart = now;
+    }
+
+    if (hourlyCount >= limits.hourly) return { ok: false as const, reason: 'hourly' as const };
+    if (dailyCount >= limits.daily) return { ok: false as const, reason: 'daily' as const };
+
+    tx.set(ref, {
+      hourlyCount: hourlyCount + 1,
+      hourlyStart: admin.firestore.Timestamp.fromMillis(hourlyStart),
+      dailyCount: dailyCount + 1,
+      dailyStart: admin.firestore.Timestamp.fromMillis(dailyStart),
+    }, { merge: true });
+
+    return { ok: true as const };
+  });
+}
+
+async function rejectWithMessage(
+  ref: FirebaseFirestore.DocumentReference,
+  recipientUid: string,
+  message: string,
+): Promise<void> {
+  await ref.delete().catch(() => {});
+  await db.collection('notifications').add({
+    type: 'rate_limit',
+    recipientUid,
+    actor: { uid: 'system', displayName: 'huuwa', username: 'huuwa', avatarUrl: null },
+    actorUid: 'system',
+    targetId: ref.id,
+    message,
+    read: false,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  }).catch(() => {});
+}
+
+export const rateLimitTweet = onDocumentCreated(
+  { region: 'us-central1', document: 'tweets/{tweetId}' },
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+    const data = snap.data();
+    const uid = data?.authorUid;
+    if (!uid) return;
+    const kind = data?.parentTweetId ? 'reply' : 'tweet';
+    const result = await checkAndIncrementLimit(uid, kind);
+    if (!result.ok) {
+      const msg = result.reason === 'hourly'
+        ? '投稿の速度が速すぎます。しばらく時間をおいて再度お試しください。'
+        : '本日の投稿上限に達しました。明日また投稿できます。';
+      await rejectWithMessage(snap.ref, uid, msg);
+    }
+  },
+);
+
+export const rateLimitThread = onDocumentCreated(
+  { region: 'us-central1', document: 'threads/{threadId}' },
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+    const uid = snap.data()?.authorUid;
+    if (!uid) return;
+    const result = await checkAndIncrementLimit(uid, 'thread');
+    if (!result.ok) {
+      const msg = result.reason === 'hourly'
+        ? 'スレッドの作成速度が速すぎます。しばらく時間をおいてください。'
+        : '本日のスレッド作成上限に達しました。';
+      await rejectWithMessage(snap.ref, uid, msg);
+    }
+  },
+);
+
+export const rateLimitChatRoom = onDocumentCreated(
+  { region: 'us-central1', document: 'chatRooms/{roomId}' },
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+    const data = snap.data();
+    if (data?.type !== 'open') return; // Only count open chat rooms
+    const uid = data?.createdBy;
+    if (!uid) return;
+    const result = await checkAndIncrementLimit(uid, 'openchat');
+    if (!result.ok) {
+      const msg = result.reason === 'hourly'
+        ? 'オープンチャットの作成速度が速すぎます。しばらく時間をおいてください。'
+        : '本日のオープンチャット作成上限に達しました。';
+      await rejectWithMessage(snap.ref, uid, msg);
+    }
+  },
+);
+
+// ─── One-time migration: move email out of public users docs into userPrivate ───
+// Callable by anyone authed; only processes the caller's own profile.
+// Safe to call repeatedly (idempotent).
+
+export const migrateMyEmailToPrivate = onCall(
+  { region: 'us-central1' },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError('unauthenticated', 'ログインが必要です');
+
+    const userSnap = await db.collection('users').doc(uid).get();
+    const data = userSnap.data();
+    const email = data?.email as string | undefined;
+    if (!email) return { ok: true, migrated: false };
+
+    await db.collection('userPrivate').doc(uid).set({
+      email,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    await db.collection('users').doc(uid).update({
+      email: admin.firestore.FieldValue.delete(),
+    });
+
+    return { ok: true, migrated: true };
+  },
+);
+
+// ─── Image moderation: when a tweet/thread is created with images, scan them with Gemini ───
+async function moderateImageBytes(buffer: Buffer, mime: string): Promise<ModerationResult | null> {
+  try {
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY.value());
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+    const result = await model.generateContent([
+      MODERATION_PROMPT.replace('{CONTENT}', '(image attached — judge based on visual content)'),
+      { inlineData: { data: buffer.toString('base64'), mimeType: mime } },
+    ]);
+    const text = result.response.text();
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    return JSON.parse(jsonMatch[0]) as ModerationResult;
+  } catch (e) {
+    console.error('[moderateImageBytes] error:', e);
+    return null;
+  }
+}
+
+async function moderateImageUrls(urls: string[]): Promise<ModerationResult | null> {
+  // Fetch each image and run moderation; high-severity hit short-circuits.
+  for (const url of urls) {
+    try {
+      const res = await fetch(url);
+      if (!res.ok) continue;
+      const mime = res.headers.get('content-type') ?? 'image/jpeg';
+      const buf = Buffer.from(await res.arrayBuffer());
+      const r = await moderateImageBytes(buf, mime);
+      if (r?.flagged && (r.severity === 'high' || r.severity === 'medium')) return r;
+    } catch (e) {
+      console.error('[moderateImageUrls] fetch failed for', url, e);
+    }
+  }
+  return null;
+}
+
+export const moderateTweetImages = onDocumentCreated(
+  {
+    region: 'us-central1',
+    document: 'tweets/{tweetId}',
+    secrets: [GEMINI_API_KEY],
+  },
+  async (event) => {
+    const snap = event.data;
+    if (!snap) return;
+    const data = snap.data();
+    const urls: string[] = data?.imageUrls ?? [];
+    if (urls.length === 0) return;
+
+    const result = await moderateImageUrls(urls);
+    if (!result || !result.flagged) return;
+
+    console.log(`[moderateTweetImages] Flagged tweet ${event.params.tweetId}:`, result);
+
+    if (result.severity === 'high') {
+      await snap.ref.delete().catch(() => {});
+      if (data?.authorUid) {
+        await db.collection('notifications').add({
+          type: 'moderation',
+          recipientUid: data.authorUid,
+          actor: { uid: 'system', displayName: 'huuwa', username: 'huuwa', avatarUrl: null },
+          actorUid: 'system',
+          targetId: event.params.tweetId,
+          message: `投稿の画像がガイドライン違反(${result.categories.join(', ')})で自動削除されました。`,
+          read: false,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        }).catch(() => {});
+      }
+    } else if (result.severity === 'medium') {
+      await snap.ref.update({
+        moderationFlagged: true,
+        moderationCategories: result.categories,
+        moderationReason: result.reason ?? null,
+      }).catch(() => {});
+    }
+  },
+);

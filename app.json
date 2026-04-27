@@ -1,0 +1,77 @@
+{
+  "expo": {
+    "name": "huuwa",
+    "slug": "huuwa",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "scheme": "huuwa",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.huuwa.app",
+      "usesAppleSignIn": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSMicrophoneUsageDescription": "ボイスメッセージの録音にマイクを使用します。",
+        "NSPhotoLibraryUsageDescription": "投稿に画像や動画を添付するために写真へアクセスします。",
+        "NSPhotoLibraryAddUsageDescription": "保存した画像をアルバムに追加します。",
+        "NSCameraUsageDescription": "プロフィール画像や投稿の撮影にカメラを使用します。",
+        "NSUserTrackingUsageDescription": "あなたに関連性の高い広告を表示するためにIDを使用します。"
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "package": "com.huuwa.app",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-web-browser",
+      "expo-font",
+      "expo-image-picker",
+      "expo-audio",
+      "expo-video",
+      "expo-apple-authentication",
+      "@react-native-community/datetimepicker",
+      "expo-asset",
+      [
+        "react-native-google-mobile-ads",
+        {
+          "androidAppId": "ca-app-pub-6043508972278040~3016182784",
+          "iosAppId": "ca-app-pub-6043508972278040~1748686813",
+          "userTrackingUsageDescription": "このIDはあなたに関連性の高い広告を表示するために使用されます。"
+        }
+      ],
+      [
+        "expo-tracking-transparency",
+        {
+          "userTrackingPermission": "あなたに関連性の高い広告を表示するためにIDを使用します。"
+        }
+      ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "d0542308-093d-454d-9c51-2f1c6291cb51"
+      }
+    }
+  }
+}

@@ -1,0 +1,37 @@
+[debug] [2026-04-22T13:57:01.201Z] ----------------------------------------------------------------------
+[debug] [2026-04-22T13:57:01.204Z] Command:       /usr/local/Cellar/node@22/22.22.0/bin/node /usr/local/bin/firebase functions:secrets:set AIzaSyAy8sW3WuLV289f1EDakNMRqyz1Vx7KY_U
+[debug] [2026-04-22T13:57:01.205Z] CLI Version:   15.6.0
+[debug] [2026-04-22T13:57:01.205Z] Platform:      darwin
+[debug] [2026-04-22T13:57:01.205Z] Node Version:  v22.22.0
+[debug] [2026-04-22T13:57:01.205Z] Time:          Wed Apr 22 2026 22:57:01 GMT+0900 (日本標準時)
+[debug] [2026-04-22T13:57:01.205Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-04-22T13:57:01.416Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-04-22T13:57:01.416Z] > authorizing via signed-in user (adfa76084@gmail.com)
+[debug] [2026-04-22T13:57:01.417Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-04-22T13:57:01.417Z] > authorizing via signed-in user (adfa76084@gmail.com)
+[debug] [2026-04-22T13:57:01.417Z] [iam] checking project glow-38ddf for permissions ["firebase.projects.get","secretmanager.secrets.create","secretmanager.secrets.get","secretmanager.secrets.update","secretmanager.versions.add"]
+[debug] [2026-04-22T13:57:01.418Z] Checked if tokens are valid: true, expires at: 1776867874021
+[debug] [2026-04-22T13:57:01.418Z] Checked if tokens are valid: true, expires at: 1776867874021
+[debug] [2026-04-22T13:57:01.419Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/glow-38ddf:testIamPermissions [none]
+[debug] [2026-04-22T13:57:01.419Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/glow-38ddf:testIamPermissions  x-goog-user-project=glow-38ddf
+[debug] [2026-04-22T13:57:01.419Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/glow-38ddf:testIamPermissions {"permissions":["firebase.projects.get","secretmanager.secrets.create","secretmanager.secrets.get","secretmanager.secrets.update","secretmanager.versions.add"]}
+[debug] [2026-04-22T13:57:02.147Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/glow-38ddf:testIamPermissions 200
+[debug] [2026-04-22T13:57:02.147Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/glow-38ddf:testIamPermissions {"permissions":["firebase.projects.get","secretmanager.secrets.create","secretmanager.secrets.get","secretmanager.secrets.update","secretmanager.versions.add"]}
+[debug] [2026-04-22T13:57:02.148Z] Checked if tokens are valid: true, expires at: 1776867874021
+[debug] [2026-04-22T13:57:02.148Z] Checked if tokens are valid: true, expires at: 1776867874021
+[debug] [2026-04-22T13:57:02.148Z] >>> [apiv2][query] GET https://cloudresourcemanager.googleapis.com/v1/projects/glow-38ddf [none]
+[debug] [2026-04-22T13:57:02.334Z] <<< [apiv2][status] GET https://cloudresourcemanager.googleapis.com/v1/projects/glow-38ddf 200
+[debug] [2026-04-22T13:57:02.334Z] <<< [apiv2][body] GET https://cloudresourcemanager.googleapis.com/v1/projects/glow-38ddf {"projectNumber":"672693007858","projectId":"glow-38ddf","lifecycleState":"ACTIVE","name":"Glow","labels":{"firebase":"enabled","firebase-core":"disabled"},"createTime":"2026-02-11T08:04:37.659151Z"}
+[warn] ⚠  By convention, secret key must be in UPPER_SNAKE_CASE. 
+[debug] [2026-04-22T13:57:06.143Z] Checked if tokens are valid: true, expires at: 1776867874021
+[debug] [2026-04-22T13:57:06.144Z] Checked if tokens are valid: true, expires at: 1776867874021
+[debug] [2026-04-22T13:57:06.144Z] >>> [apiv2][query] GET https://secretmanager.googleapis.com/v1/projects/glow-38ddf/secrets/AIZA_SY_AY8S_W3WU_LV289F1EDAK_NMRQYZ1VX7KY_U [none]
+[debug] [2026-04-22T13:57:06.339Z] <<< [apiv2][status] GET https://secretmanager.googleapis.com/v1/projects/glow-38ddf/secrets/AIZA_SY_AY8S_W3WU_LV289F1EDAK_NMRQYZ1VX7KY_U 404
+[debug] [2026-04-22T13:57:06.339Z] <<< [apiv2][body] GET https://secretmanager.googleapis.com/v1/projects/glow-38ddf/secrets/AIZA_SY_AY8S_W3WU_LV289F1EDAK_NMRQYZ1VX7KY_U {"error":{"code":404,"message":"Secret [projects/672693007858/secrets/AIZA_SY_AY8S_W3WU_LV289F1EDAK_NMRQYZ1VX7KY_U] not found.","status":"NOT_FOUND"}}
+[debug] [2026-04-22T13:57:06.341Z] Checked if tokens are valid: true, expires at: 1776867874021
+[debug] [2026-04-22T13:57:06.341Z] Checked if tokens are valid: true, expires at: 1776867874021
+[debug] [2026-04-22T13:57:06.342Z] >>> [apiv2][query] POST https://secretmanager.googleapis.com/v1/projects/glow-38ddf/secrets secretId=AIZA_SY_AY8S_W3WU_LV289F1EDAK_NMRQYZ1VX7KY_U
+[debug] [2026-04-22T13:57:06.342Z] >>> [apiv2][body] POST https://secretmanager.googleapis.com/v1/projects/glow-38ddf/secrets {"name":"AIZA_SY_AY8S_W3WU_LV289F1EDAK_NMRQYZ1VX7KY_U","replication":{"automatic":{}},"labels":{"firebase-managed":"functions"}}
+[debug] [2026-04-22T13:57:08.360Z] <<< [apiv2][status] POST https://secretmanager.googleapis.com/v1/projects/glow-38ddf/secrets 200
+[debug] [2026-04-22T13:57:08.360Z] <<< [apiv2][body] POST https://secretmanager.googleapis.com/v1/projects/glow-38ddf/secrets {"name":"projects/672693007858/secrets/AIZA_SY_AY8S_W3WU_LV289F1EDAK_NMRQYZ1VX7KY_U","replication":{"automatic":{}},"createTime":"2026-04-22T13:57:06.418682Z","labels":{"firebase-managed":"functions"},"etag":"\"16500ce8598ab5\""}

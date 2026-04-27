@@ -1,0 +1,208 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ─── Helper functions ───
+    function isSignedIn() { return request.auth != null; }
+    function isMe(uid) { return isSignedIn() && request.auth.uid == uid; }
+    function ownsExisting(field) { return isSignedIn() && resource.data[field] == request.auth.uid; }
+    function counterOnlyChange(allowed) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(allowed);
+    }
+
+    // ─── Public-readable collections (guests included) ───
+    // Users (profile info) are always public
+    match /users/{userId} { allow read: if true; }
+    match /categories/{categoryId} { allow read: if true; }
+    match /hashtags/{tag} { allow read: if true; }
+
+    // ─── Admin-only verification code stores ───
+    match /emailChangeCodes/{uid}    { allow read, write: if false; }
+    match /passwordResetCodes/{uid}  { allow read, write: if false; }
+    match /phoneAuthCodes/{id}       { allow read, write: if false; }
+    match /rateLimits/{id}           { allow read, write: if false; }
+
+    // Per-user private data (email, etc.) — owner only
+    match /userPrivate/{userId} {
+      allow read, write: if isMe(userId);
+    }
+
+    // ─── Users ───
+    match /users/{userId} {
+      allow create: if isMe(userId);
+      allow delete: if isMe(userId);
+      allow update: if isMe(userId)
+        || (isSignedIn() && counterOnlyChange(['followersCount', 'followingCount', 'tweetsCount']));
+    }
+
+    // ─── Tweets ───
+    // Reads are public; private-account posts are filtered out client-side via authorIsPrivate flag.
+    match /tweets/{tweetId} {
+      allow read: if true;
+      allow create: if isSignedIn() && request.resource.data.authorUid == request.auth.uid;
+      allow delete: if ownsExisting('authorUid');
+      allow update: if ownsExisting('authorUid')
+        || (isSignedIn() && counterOnlyChange(['likesCount', 'bookmarksCount', 'repliesCount', 'viewsCount']));
+    }
+
+    // ─── Threads ───
+    match /threads/{threadId} {
+      allow read: if true;
+      allow create: if isSignedIn() && request.resource.data.authorUid == request.auth.uid;
+      allow delete: if ownsExisting('authorUid');
+      allow update: if ownsExisting('authorUid')
+        || (isSignedIn() && counterOnlyChange(['repliesCount', 'lastReplyAt', 'likesCount']));
+
+      match /replies/{replyId} {
+        allow read: if true;
+        allow create: if isSignedIn() && request.resource.data.authorUid == request.auth.uid;
+        allow update, delete: if ownsExisting('authorUid');
+      }
+    }
+
+    // ─── Chat rooms ───
+    match /chatRooms/{roomId} {
+      allow read: if resource.data.type == 'open' || isSignedIn();
+      allow create: if isSignedIn() && request.resource.data.createdBy == request.auth.uid;
+      // Allow update if user is a member, OR room is open (joining)
+      allow update: if isSignedIn()
+        && (request.auth.uid in resource.data.members || resource.data.type == 'open');
+
+      match /messages/{messageId} {
+        // Open chat messages readable by anyone; DM/group restricted to signed-in users
+        allow read: if get(/databases/$(database)/documents/chatRooms/$(roomId)).data.type == 'open' || isSignedIn();
+        allow create: if isSignedIn() && request.resource.data.senderUid == request.auth.uid;
+      }
+      match /notes/{noteId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn() && request.resource.data.authorUid == request.auth.uid;
+        allow delete: if ownsExisting('authorUid');
+      }
+      match /events/{eventId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn() && request.resource.data.authorUid == request.auth.uid;
+        allow update: if isSignedIn();
+        allow delete: if ownsExisting('authorUid');
+      }
+      match /files/{fileId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn() && request.resource.data.uploaderUid == request.auth.uid;
+        allow delete: if ownsExisting('uploaderUid');
+      }
+    }
+
+    // ─── Chat notification preferences (per user) ───
+    match /chatNotificationPrefs/{prefId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // ─── Polls ───
+    match /polls/{pollId} {
+      allow read: if true;
+      allow create: if isSignedIn() && request.resource.data.createdByUid == request.auth.uid;
+      // Anyone authed can update vote counters; author can update freely
+      allow update: if (isSignedIn() && resource.data.createdByUid == request.auth.uid)
+        || (isSignedIn() && counterOnlyChange(['voters', 'votes']));
+    }
+
+    // ─── Follows: id format `${followerUid}_${followingUid}` ───
+    match /follows/{followId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.followerUid == request.auth.uid
+        && followId == request.auth.uid + '_' + request.resource.data.followingUid;
+      allow delete: if isSignedIn()
+        && (resource.data.followerUid == request.auth.uid
+            || resource.data.followingUid == request.auth.uid);
+    }
+
+    // ─── Follow requests (private accounts) ───
+    match /followRequests/{requestId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.fromUid == request.auth.uid
+        && requestId == request.auth.uid + '_' + request.resource.data.toUid;
+      // Either the requester or the target can delete
+      allow delete: if isSignedIn()
+        && (resource.data.fromUid == request.auth.uid
+            || resource.data.toUid == request.auth.uid);
+    }
+
+    // ─── Likes: id format `${userId}_${tweetId}` ───
+    match /likes/{likeId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && likeId == request.auth.uid + '_' + request.resource.data.tweetId;
+      allow delete: if ownsExisting('userId');
+    }
+
+    // ─── Thread likes: id format `${userId}_${threadId}` ───
+    match /threadLikes/{likeId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && likeId == request.auth.uid + '_' + request.resource.data.threadId;
+      allow delete: if ownsExisting('userId');
+    }
+
+    // ─── Bookmarks: id format `${userId}_${tweetId}` ───
+    match /bookmarks/{bookmarkId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid
+        && bookmarkId == request.auth.uid + '_' + request.resource.data.tweetId;
+      allow delete: if ownsExisting('userId');
+    }
+
+    // ─── Notifications: actor must match auth user ───
+    match /notifications/{notificationId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.actorUid == request.auth.uid;
+      // Recipient can mark as read (full update by recipient only)
+      allow update: if isSignedIn() && resource.data.recipientUid == request.auth.uid;
+    }
+
+    // ─── Categories ───
+    // User-created categories must claim the creator; default categories (seed) don't have createdBy.
+    match /categories/{categoryId} {
+      allow create: if isSignedIn()
+        && (request.resource.data.createdBy == request.auth.uid
+            || request.resource.data.type == 'default');
+      // Members count can be updated by anyone authed; other fields by creator only
+      allow update: if (isSignedIn() && resource.data.createdBy == request.auth.uid)
+        || (isSignedIn() && counterOnlyChange(['membersCount']));
+
+      match /members/{memberId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn()
+          && request.resource.data.userId == request.auth.uid
+          && memberId == request.auth.uid;
+        allow delete: if ownsExisting('userId');
+      }
+    }
+
+    // ─── Tweet views (impression tracking) ───
+    match /tweetViews/{viewId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn()
+        && request.resource.data.userId == request.auth.uid;
+    }
+
+    // ─── Reports ───
+    match /reports/{reportId} {
+      allow read: if isSignedIn() && resource.data.reporterUid == request.auth.uid;
+      allow create: if isSignedIn()
+        && request.resource.data.reporterUid == request.auth.uid;
+    }
+
+    // ─── Shorts ───
+    match /shorts/{shortId} {
+      allow read: if true;
+      allow create: if isSignedIn() && request.resource.data.authorUid == request.auth.uid;
+      allow delete: if ownsExisting('authorUid');
+      allow update: if ownsExisting('authorUid')
+        || (isSignedIn() && counterOnlyChange(['likesCount', 'bookmarksCount', 'commentsCount', 'viewsCount']));
+    }
+  }
+}

@@ -1,0 +1,74 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    // ─── Helper functions ───
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    function isImage() { return request.resource.contentType.matches('image/.*'); }
+    function isVideo() { return request.resource.contentType.matches('video/.*'); }
+    function isAudio() { return request.resource.contentType.matches('audio/.*'); }
+    function under(maxBytes) { return request.resource.size < maxBytes; }
+    // Reasonable defaults
+    function imageOk() { return isImage() && under(10 * 1024 * 1024); }      // 10 MB
+    function videoOk() { return isVideo() && under(100 * 1024 * 1024); }     // 100 MB
+    function audioOk() { return isAudio() && under(20 * 1024 * 1024); }      // 20 MB
+    function fileOk()  { return under(20 * 1024 * 1024); }                   // 20 MB any
+
+    // ─── Reads ───
+    // Anyone authenticated can read any file (matches our public-content posture)
+    match /{allPaths=**} {
+      allow read: if signedIn();
+    }
+
+    // ─── Tweets / threads / shorts (images & media) ───
+    match /tweets/{userId}/{fileName} {
+      allow write: if isOwner(userId) && imageOk();
+    }
+    match /thread-images/{userId}/{fileName} {
+      allow write: if isOwner(userId) && imageOk();
+    }
+    match /thread-videos/{userId}/{fileName} {
+      allow write: if isOwner(userId) && videoOk();
+    }
+    match /thread-voice/{userId}/{fileName} {
+      allow write: if isOwner(userId) && audioOk();
+    }
+    match /thread-files/{userId}/{fileName} {
+      allow write: if isOwner(userId) && fileOk();
+    }
+    match /shorts/{userId}/{fileName} {
+      allow write: if isOwner(userId) && videoOk();
+    }
+    match /short_thumbs/{userId}/{fileName} {
+      allow write: if isOwner(userId) && imageOk();
+    }
+
+    // ─── Chat ───
+    match /chat_images/{userId}/{fileName} {
+      allow write: if isOwner(userId) && imageOk();
+    }
+    match /chat_videos/{userId}/{fileName} {
+      allow write: if isOwner(userId) && videoOk();
+    }
+    match /chat_files/{userId}/{fileName} {
+      allow write: if isOwner(userId) && fileOk();
+    }
+    match /chat_voice/{userId}/{fileName} {
+      allow write: if isOwner(userId) && audioOk();
+    }
+    match /openchat-images/{userId}/{fileName} {
+      allow write: if isOwner(userId) && imageOk();
+    }
+
+    // ─── Avatars / header images / category icons ───
+    match /avatars/{userId}/{fileName} {
+      allow write: if isOwner(userId) && imageOk();
+    }
+    match /headers/{userId}/{fileName} {
+      allow write: if isOwner(userId) && imageOk();
+    }
+    match /categories/{fileName} {
+      allow write: if signedIn() && imageOk();
+    }
+  }
+}

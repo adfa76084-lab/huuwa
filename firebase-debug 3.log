@@ -1,0 +1,22 @@
+[debug] [2026-04-22T14:01:56.606Z] ----------------------------------------------------------------------
+[debug] [2026-04-22T14:01:56.610Z] Command:       /usr/local/Cellar/node@22/22.22.0/bin/node /usr/local/bin/firebase deploy --only functions:moderateTweet,functions:moderateThread --project glow-38ddf
+[debug] [2026-04-22T14:01:56.611Z] CLI Version:   15.6.0
+[debug] [2026-04-22T14:01:56.611Z] Platform:      darwin
+[debug] [2026-04-22T14:01:56.611Z] Node Version:  v22.22.0
+[debug] [2026-04-22T14:01:56.611Z] Time:          Wed Apr 22 2026 23:01:56 GMT+0900 (Japan Standard Time)
+[debug] [2026-04-22T14:01:56.611Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-04-22T14:01:58.694Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-04-22T14:01:58.695Z] > authorizing via signed-in user (adfa76084@gmail.com)
+[debug] [2026-04-22T14:01:58.695Z] [iam] checking project glow-38ddf for permissions ["cloudfunctions.functions.create","cloudfunctions.functions.delete","cloudfunctions.functions.get","cloudfunctions.functions.list","cloudfunctions.functions.update","cloudfunctions.operations.get","firebase.projects.get"]
+[debug] [2026-04-22T14:01:58.696Z] Checked if tokens are valid: true, expires at: 1776867874021
+[debug] [2026-04-22T14:01:58.696Z] Checked if tokens are valid: true, expires at: 1776867874021
+[debug] [2026-04-22T14:01:58.697Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/glow-38ddf:testIamPermissions [none]
+[debug] [2026-04-22T14:01:58.698Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/glow-38ddf:testIamPermissions  x-goog-user-project=glow-38ddf
+[debug] [2026-04-22T14:01:58.698Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/glow-38ddf:testIamPermissions {"permissions":["cloudfunctions.functions.create","cloudfunctions.functions.delete","cloudfunctions.functions.get","cloudfunctions.functions.list","cloudfunctions.functions.update","cloudfunctions.operations.get","firebase.projects.get"]}
+[debug] [2026-04-22T14:01:58.943Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/glow-38ddf:testIamPermissions 200
+[debug] [2026-04-22T14:01:58.944Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/glow-38ddf:testIamPermissions {"permissions":["cloudfunctions.functions.create","cloudfunctions.functions.delete","cloudfunctions.functions.get","cloudfunctions.functions.list","cloudfunctions.functions.update","cloudfunctions.operations.get","firebase.projects.get"]}
+[debug] [2026-04-22T14:01:58.944Z] Checked if tokens are valid: true, expires at: 1776867874021
+[debug] [2026-04-22T14:01:58.944Z] Checked if tokens are valid: true, expires at: 1776867874021
+[debug] [2026-04-22T14:01:58.944Z] >>> [apiv2][query] POST https://iam.googleapis.com/v1/projects/glow-38ddf/serviceAccounts/glow-38ddf@appspot.gserviceaccount.com:testIamPermissions [none]
+[debug] [2026-04-22T14:01:58.944Z] >>> [apiv2][body] POST https://iam.googleapis.com/v1/projects/glow-38ddf/serviceAccounts/glow-38ddf@appspot.gserviceaccount.com:testIamPermissions {"permissions":["iam.serviceAccounts.actAs"]}
