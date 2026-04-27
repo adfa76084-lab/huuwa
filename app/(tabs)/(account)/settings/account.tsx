@@ -566,16 +566,16 @@ export default function AccountSettingsScreen() {
 
   const dangerRows: AccountRow[] = [
     {
-      label: 'アカウントを無効にする',
-      icon: 'warning-outline',
+      label: 'アカウントを削除する',
+      icon: 'trash-outline',
       onPress: () => {
         Alert.alert(
-          'アカウントの無効化',
-          'アカウントを無効にすると、プロフィールが非表示になります。30日以内に再度ログインすれば復元できますが、それ以降はアカウントが完全に削除されます。',
+          'アカウントを削除',
+          'アカウントを削除すると、プロフィール・投稿・メッセージなどすべてのデータが完全に削除されます。\n\n30日以内に再度ログインした場合のみ復元可能で、それ以降はすべてのデータが完全に削除され、復元できません。\n\n本当に削除しますか？',
           [
             { text: 'キャンセル', style: 'cancel' },
             {
-              text: '無効にする',
+              text: '削除する',
               style: 'destructive',
               onPress: async () => {
                 if (!user) return;
@@ -584,7 +584,7 @@ export default function AccountSettingsScreen() {
                   await signOut();
                   router.replace('/(tabs)/(account)');
                 } catch {
-                  Alert.alert('エラー', '無効化に失敗しました');
+                  Alert.alert('エラー', 'アカウントの削除に失敗しました');
                 }
               },
             },
