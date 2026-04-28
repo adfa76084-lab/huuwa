@@ -8,6 +8,7 @@ import {
   signInWithAppleIdentityToken,
 } from '@/services/firebase/auth';
 import { createUserProfile, getUserProfile } from '@/services/api/userService';
+import { useAuthStore } from '@/stores/authStore';
 
 const GOOGLE_EXPO_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_EXPO_CLIENT_ID;
 const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID;
@@ -35,6 +36,20 @@ async function ensureProfile(
   );
 }
 
+/**
+ * Push the freshly-loaded profile into the auth store. Required because
+ * SessionContext's auth-change listener fires the moment Firebase signs us in
+ * — often before `createUserProfile` has finished — so it sets user=null and
+ * never refetches. Calling this after profile creation ensures the rest of
+ * the app sees the authenticated user immediately.
+ */
+async function syncProfileToStore(uid: string): Promise<void> {
+  const profile = await getUserProfile(uid);
+  if (profile) {
+    useAuthStore.getState().setUser(profile);
+  }
+}
+
 export function useSocialAuth() {
   const [, , promptAsync] = Google.useAuthRequest({
     expoClientId: GOOGLE_EXPO_CLIENT_ID,
@@ -53,6 +68,7 @@ export function useSocialAuth() {
     if (!idToken) throw new Error('Googleログインに失敗しました');
     const user = await signInWithGoogleIdToken(idToken);
     await ensureProfile(user.uid, user.email, user.displayName);
+    await syncProfileToStore(user.uid);
     return user;
   }, [promptAsync]);
 
@@ -84,6 +100,7 @@ export function useSocialAuth() {
         ? `${credential.fullName.givenName ?? ''} ${credential.fullName.familyName ?? ''}`.trim()
         : user.displayName ?? 'ユーザー';
     await ensureProfile(user.uid, user.email ?? credential.email ?? null, displayName);
+    await syncProfileToStore(user.uid);
     return user;
   }, []);
 
