@@ -1,5 +1,4 @@
 import {
-  createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
   signOut as firebaseSignOut,
   sendPasswordResetEmail,
@@ -16,9 +15,31 @@ import {
 import { httpsCallable } from 'firebase/functions';
 import { auth, functions } from './config';
 
-export async function signUp(email: string, password: string): Promise<FirebaseUser> {
-  const cred = await createUserWithEmailAndPassword(auth, email, password);
-  return cred.user;
+/** Send a 6-digit code to the email to verify ownership before creating an account. */
+export async function requestSignupCode(email: string): Promise<void> {
+  const callable = httpsCallable(functions, 'sendSignupCode');
+  await callable({ email });
+}
+
+/**
+ * Verify the signup code and create the account server-side.
+ * The Cloud Function returns a custom token; signing in with it
+ * establishes the Firebase Auth session.
+ */
+export async function verifySignupAndCreate(input: {
+  email: string;
+  code: string;
+  password: string;
+  displayName: string;
+  username: string;
+}): Promise<FirebaseUser> {
+  const callable = httpsCallable<
+    typeof input,
+    { ok: boolean; customToken: string; uid: string }
+  >(functions, 'verifySignupAndCreate');
+  const res = await callable(input);
+  const signInRes = await signInWithCustomToken(auth, res.data.customToken);
+  return signInRes.user;
 }
 
 export async function signIn(email: string, password: string): Promise<FirebaseUser> {

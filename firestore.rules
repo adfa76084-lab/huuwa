@@ -19,6 +19,7 @@ service cloud.firestore {
     match /emailChangeCodes/{uid}    { allow read, write: if false; }
     match /passwordResetCodes/{uid}  { allow read, write: if false; }
     match /phoneAuthCodes/{id}       { allow read, write: if false; }
+    match /signupCodes/{id}          { allow read, write: if false; }
     match /rateLimits/{id}           { allow read, write: if false; }
 
     // Per-user private data (email, etc.) — owner only

@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.moderateTweetImages = exports.migrateMyEmailToPrivate = exports.rateLimitChatRoom = exports.rateLimitThread = exports.rateLimitTweet = exports.propagatePrivacyChange = exports.moderateThread = exports.moderateTweet = exports.purgeDisabledAccounts = exports.verifyPhoneCode = exports.sendPhoneCode = exports.verifyPasswordResetCode = exports.sendPasswordResetCode = exports.verifyEmailChangeCode = exports.sendEmailChangeCode = void 0;
+exports.moderateTweetImages = exports.migrateMyEmailToPrivate = exports.rateLimitChatRoom = exports.rateLimitThread = exports.rateLimitTweet = exports.propagatePrivacyChange = exports.moderateThread = exports.moderateTweet = exports.purgeDisabledAccounts = exports.verifyPhoneCode = exports.sendPhoneCode = exports.verifySignupAndCreate = exports.sendSignupCode = exports.verifyPasswordResetCode = exports.sendPasswordResetCode = exports.verifyEmailChangeCode = exports.sendEmailChangeCode = void 0;
 const https_1 = require("firebase-functions/v2/https");
 const scheduler_1 = require("firebase-functions/v2/scheduler");
 const firestore_1 = require("firebase-functions/v2/firestore");
@@ -207,6 +207,164 @@ exports.verifyPasswordResetCode = (0, https_1.onCall)({ region: 'us-central1' },
     await admin.auth().updateUser(userRecord.uid, { password: newPassword });
     await docRef.delete().catch(() => { });
     return { ok: true };
+});
+// ─── Signup with email verification (code-based) ───
+// To prevent registration with someone else's email, we send a 6-digit code
+// first, then create the Firebase Auth user only after the code is verified.
+exports.sendSignupCode = (0, https_1.onCall)({ region: 'us-central1', secrets: [RESEND_API_KEY, EMAIL_FROM] }, async (request) => {
+    const email = String(request.data?.email ?? '').trim().toLowerCase();
+    if (!EMAIL_RE.test(email)) {
+        throw new https_1.HttpsError('invalid-argument', '有効なメールアドレスを入力してください');
+    }
+    try {
+        await admin.auth().getUserByEmail(email);
+        throw new https_1.HttpsError('already-exists', 'このメールアドレスは既に登録されています');
+    }
+    catch (e) {
+        if (e instanceof https_1.HttpsError)
+            throw e;
+        if (e?.code !== 'auth/user-not-found') {
+            throw new https_1.HttpsError('internal', 'メールアドレスの確認に失敗しました');
+        }
+    }
+    const docId = sha256(email);
+    const docRef = db.collection('signupCodes').doc(docId);
+    const existing = await docRef.get();
+    if (existing.exists) {
+        const last = existing.data()?.createdAt?.toMillis?.() ?? 0;
+        if (Date.now() - last < RESEND_COOLDOWN_MS) {
+            throw new https_1.HttpsError('resource-exhausted', '再送信は1分後にお試しください');
+        }
+    }
+    const code = String((0, crypto_1.randomInt)(0, 1_000_000)).padStart(6, '0');
+    await docRef.set({
+        email,
+        codeHash: sha256(code),
+        attempts: 0,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        expiresAt: admin.firestore.Timestamp.fromMillis(Date.now() + CODE_TTL_MS),
+    });
+    const resend = new resend_1.Resend(RESEND_API_KEY.value());
+    const { error } = await resend.emails.send({
+        from: EMAIL_FROM.value(),
+        to: email,
+        subject: 'huuwa 新規登録の認証コード',
+        text: `huuwaへようこそ!\n\n認証コードは ${code} です。\n\n10分以内にアプリで入力してください。\n心当たりがない場合はこのメールを無視してください。`,
+        html: `<p>huuwaへようこそ!</p><p>認証コードは <strong style="font-size:20px;letter-spacing:2px">${code}</strong> です。</p><p>10分以内にアプリで入力してください。</p><p style="color:#888;font-size:12px">心当たりがない場合はこのメールを無視してください。</p>`,
+    });
+    if (error) {
+        await docRef.delete().catch(() => { });
+        throw new https_1.HttpsError('internal', 'メール送信に失敗しました');
+    }
+    return { ok: true };
+});
+exports.verifySignupAndCreate = (0, https_1.onCall)({ region: 'us-central1' }, async (request) => {
+    const email = String(request.data?.email ?? '').trim().toLowerCase();
+    const code = String(request.data?.code ?? '').trim();
+    const password = String(request.data?.password ?? '');
+    const displayName = String(request.data?.displayName ?? '').trim();
+    const username = String(request.data?.username ?? '').trim();
+    if (!EMAIL_RE.test(email)) {
+        throw new https_1.HttpsError('invalid-argument', '有効なメールアドレスを入力してください');
+    }
+    if (!/^\d{6}$/.test(code)) {
+        throw new https_1.HttpsError('invalid-argument', '6桁のコードを入力してください');
+    }
+    if (password.length < 6) {
+        throw new https_1.HttpsError('invalid-argument', 'パスワードは6文字以上で入力してください');
+    }
+    if (!displayName || displayName.length > 30) {
+        throw new https_1.HttpsError('invalid-argument', '表示名を入力してください (30文字以内)');
+    }
+    if (!/^[a-zA-Z0-9_]{3,15}$/.test(username)) {
+        throw new https_1.HttpsError('invalid-argument', 'ユーザー名は3〜15文字の英数字またはアンダースコアで入力してください');
+    }
+    const docId = sha256(email);
+    const docRef = db.collection('signupCodes').doc(docId);
+    const snap = await docRef.get();
+    if (!snap.exists) {
+        throw new https_1.HttpsError('not-found', '認証コードが見つかりません。再送信してください');
+    }
+    const data = snap.data();
+    const expiresAt = data.expiresAt;
+    if (expiresAt.toMillis() < Date.now()) {
+        await docRef.delete().catch(() => { });
+        throw new https_1.HttpsError('deadline-exceeded', '認証コードの有効期限が切れました');
+    }
+    const attempts = (data.attempts ?? 0);
+    if (attempts >= MAX_ATTEMPTS) {
+        await docRef.delete().catch(() => { });
+        throw new https_1.HttpsError('resource-exhausted', '試行回数の上限に達しました。再送信してください');
+    }
+    if (sha256(code) !== data.codeHash) {
+        await docRef.update({ attempts: attempts + 1 });
+        throw new https_1.HttpsError('permission-denied', '認証コードが正しくありません');
+    }
+    // Race-condition guard: re-check the email isn't taken now that we hold a verified code.
+    try {
+        await admin.auth().getUserByEmail(email);
+        await docRef.delete().catch(() => { });
+        throw new https_1.HttpsError('already-exists', 'このメールアドレスは既に登録されています');
+    }
+    catch (e) {
+        if (e instanceof https_1.HttpsError)
+            throw e;
+        if (e?.code !== 'auth/user-not-found') {
+            throw new https_1.HttpsError('internal', 'メールアドレスの確認に失敗しました');
+        }
+    }
+    const usernameQuery = await db.collection('users')
+        .where('username', '==', username)
+        .limit(1)
+        .get();
+    if (!usernameQuery.empty) {
+        throw new https_1.HttpsError('already-exists', 'このユーザー名は既に使用されています');
+    }
+    let userRecord;
+    try {
+        userRecord = await admin.auth().createUser({
+            email,
+            password,
+            displayName,
+            emailVerified: true,
+        });
+    }
+    catch (e) {
+        if (e?.code === 'auth/email-already-exists') {
+            throw new https_1.HttpsError('already-exists', 'このメールアドレスは既に登録されています');
+        }
+        throw new https_1.HttpsError('internal', 'アカウントの作成に失敗しました');
+    }
+    const uid = userRecord.uid;
+    try {
+        await db.collection('users').doc(uid).set({
+            uid,
+            displayName,
+            username,
+            avatarUrl: null,
+            headerImageUrl: null,
+            bio: '',
+            statusMessage: '',
+            hobbies: [],
+            followersCount: 0,
+            followingCount: 0,
+            tweetsCount: 0,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+        await db.collection('userPrivate').doc(uid).set({
+            email,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+    }
+    catch {
+        await admin.auth().deleteUser(uid).catch(() => { });
+        throw new https_1.HttpsError('internal', 'プロフィールの作成に失敗しました');
+    }
+    await docRef.delete().catch(() => { });
+    const customToken = await admin.auth().createCustomToken(uid);
+    return { ok: true, customToken, uid };
 });
 // ─── Phone number sign-in (via Twilio + custom tokens) ───
 const PHONE_RE = /^\+[1-9]\d{6,14}$/; // E.164
