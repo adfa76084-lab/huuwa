@@ -185,7 +185,7 @@ export default function RegisterScreen() {
                 style={styles.linkButton}
               />
 
-              <SocialAuthButtons />
+              <SocialAuthButtons mode="register" />
             </>
           ) : (
             <>

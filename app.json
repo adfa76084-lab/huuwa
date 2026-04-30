@@ -65,6 +65,12 @@
         {
           "userTrackingPermission": "あなたに関連性の高い広告を表示するためにIDを使用します。"
         }
+      ],
+      [
+        "@react-native-google-signin/google-signin",
+        {
+          "iosUrlScheme": "com.googleusercontent.apps.672693007858-94nin3hbkkj98da1s4i4t8873r3cv18a"
+        }
       ]
     ],
     "extra": {

@@ -7,17 +7,22 @@ import { useThemeColors } from '@/hooks/useThemeColors';
 import { useSocialAuth } from '@/hooks/useSocialAuth';
 import { Spacing, FontSize, BorderRadius } from '@/constants/theme';
 
-export function SocialAuthButtons() {
+interface SocialAuthButtonsProps {
+  mode?: 'login' | 'register';
+}
+
+export function SocialAuthButtons({ mode = 'login' }: SocialAuthButtonsProps) {
   const colors = useThemeColors();
   const router = useRouter();
   const { signInWithGoogle, signInWithApple } = useSocialAuth();
   const [loadingProvider, setLoadingProvider] = useState<string | null>(null);
+  const verb = mode === 'register' ? '登録' : 'ログイン';
 
   const handleGoogle = async () => {
     setLoadingProvider('google');
     try {
-      await signInWithGoogle();
-      router.replace('/');
+      const { isNewUser } = await signInWithGoogle();
+      router.replace(isNewUser ? '/(auth)/phone-setup' : '/');
     } catch (e: any) {
       Alert.alert('エラー', e?.message ?? 'Googleログインに失敗しました');
     } finally {
@@ -28,8 +33,8 @@ export function SocialAuthButtons() {
   const handleApple = async () => {
     setLoadingProvider('apple');
     try {
-      await signInWithApple();
-      router.replace('/');
+      const { isNewUser } = await signInWithApple();
+      router.replace(isNewUser ? '/(auth)/phone-setup' : '/');
     } catch (e: any) {
       if (e?.code === 'ERR_REQUEST_CANCELED') {
         setLoadingProvider(null);
@@ -68,7 +73,7 @@ export function SocialAuthButtons() {
             <>
               <Ionicons name="logo-apple" size={20} color="#FFFFFF" />
               <Text style={[styles.buttonText, { color: '#FFFFFF' }]}>
-                Appleでログイン
+                Appleで{verb}
               </Text>
             </>
           )}
@@ -87,7 +92,7 @@ export function SocialAuthButtons() {
           <>
             <Ionicons name="logo-google" size={20} color="#DB4437" />
             <Text style={[styles.buttonText, { color: colors.text }]}>
-              Googleでログイン
+              Googleで{verb}
             </Text>
           </>
         )}
@@ -101,7 +106,7 @@ export function SocialAuthButtons() {
       >
         <Ionicons name="call-outline" size={20} color={colors.text} />
         <Text style={[styles.buttonText, { color: colors.text }]}>
-          電話番号でログイン
+          電話番号で{verb}
         </Text>
       </TouchableOpacity>
     </View>

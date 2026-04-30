@@ -99,8 +99,16 @@ export async function confirmPasswordResetCode(
   await callable({ email, code, newPassword });
 }
 
-export async function signInWithGoogleIdToken(idToken: string): Promise<FirebaseUser> {
-  const credential = GoogleAuthProvider.credential(idToken);
+export async function signInWithGoogleIdToken(
+  tokens: { idToken?: string | null; accessToken?: string | null },
+): Promise<FirebaseUser> {
+  if (!tokens.idToken && !tokens.accessToken) {
+    throw new Error('Googleの認証トークンが取得できませんでした');
+  }
+  const credential = GoogleAuthProvider.credential(
+    tokens.idToken ?? null,
+    tokens.accessToken ?? null,
+  );
   const res = await signInWithCredential(auth, credential);
   return res.user;
 }
