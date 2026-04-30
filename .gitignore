@@ -45,3 +45,9 @@ yarn-error.*
 
 # git backup
 .git.backup/
+
+# Claude Code local config
+.claude/
+
+# Cloud Functions build output
+functions/lib/
