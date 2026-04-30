@@ -11,6 +11,8 @@ export default function ThreadsLayout() {
         headerStyle: { backgroundColor: colors.background },
         headerTintColor: colors.text,
         headerShadowVisible: false,
+        headerBackTitle: '',
+        headerBackButtonDisplayMode: 'minimal',
       }}
     >
       <Stack.Screen name="index" options={{ title: 'スレッド' }} />

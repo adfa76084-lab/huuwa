@@ -102,19 +102,17 @@ export default function PhoneSetupScreen() {
           )}
 
           <TextInput
-            label="表示名"
             value={displayName}
             onChangeText={setDisplayName}
             error={errors.displayName}
-            placeholder="例: 田中 太郎"
+            placeholder="ニックネームを入力してください"
           />
 
           <TextInput
-            label="ユーザー名"
             value={username}
             onChangeText={(t) => setUsername(t.replace(/\s+/g, ''))}
             error={errors.username}
-            placeholder="例: tanaka_taro"
+            placeholder="ユーザー名"
             autoCapitalize="none"
             autoCorrect={false}
           />

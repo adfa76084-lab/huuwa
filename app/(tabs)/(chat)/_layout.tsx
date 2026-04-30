@@ -287,6 +287,8 @@ export default function ChatLayout() {
           headerStyle: { backgroundColor: colors.background },
           headerTintColor: colors.text,
           headerShadowVisible: false,
+          headerBackTitle: '',
+          headerBackButtonDisplayMode: 'minimal',
         }}
       >
         <Stack.Screen

@@ -34,6 +34,7 @@ import { ChatInput } from '@/components/chat/ChatInput';
 import { MessageRequestActionBar } from '@/components/chat/MessageRequestActionBar';
 import { LoadingIndicator } from '@/components/ui/LoadingIndicator';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { Avatar } from '@/components/ui/Avatar';
 import { AttachmentMenu } from '@/components/thread/AttachmentMenu';
 import { VoiceRecordButton } from '@/components/chat/VoiceRecordButton';
 import { PollCreatorModal } from '@/components/thread/PollCreatorModal';
@@ -313,6 +314,25 @@ export default function ChatRoomScreen() {
 
   const handleClearPending = useCallback(() => setPending(null), []);
 
+  // ─── Header info (DM partner / group meta) ───
+  const headerInfo = useMemo(() => {
+    if (!room) return null;
+    if (room.type === 'dm') {
+      const partnerUid = room.members.find((uid) => uid !== user?.uid);
+      const partner = partnerUid ? room.memberProfiles[partnerUid] : null;
+      return {
+        avatarUrl: partner?.avatarUrl ?? null,
+        title: partner?.displayName ?? 'ユーザー',
+        subtitle: partner?.username ? `@${partner.username}` : null,
+      };
+    }
+    return {
+      avatarUrl: room.imageUrl,
+      title: room.name ?? 'グループ',
+      subtitle: `${room.membersCount}人のメンバー`,
+    };
+  }, [room, user]);
+
   // ─── Render ───
   if (loading) {
     return <LoadingIndicator fullScreen />;
@@ -330,6 +350,28 @@ export default function ChatRoomScreen() {
     >
       <Stack.Screen
         options={{
+          headerTitle: () => (
+            <View style={styles.headerTitleContainer}>
+              <Avatar uri={headerInfo?.avatarUrl ?? null} size={36} />
+              <View style={styles.headerTitleTextContainer}>
+                <Text
+                  style={[styles.headerTitle, { color: colors.text }]}
+                  numberOfLines={1}
+                >
+                  {headerInfo?.title ?? ''}
+                </Text>
+                {headerInfo?.subtitle && (
+                  <Text
+                    style={[styles.headerSubtitle, { color: colors.textSecondary }]}
+                    numberOfLines={1}
+                  >
+                    {headerInfo.subtitle}
+                  </Text>
+                )}
+              </View>
+            </View>
+          ),
+          headerTitleAlign: 'left',
           headerRight: () => (
             <TouchableOpacity
               onPress={() => {
@@ -338,7 +380,11 @@ export default function ChatRoomScreen() {
               }}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <Ionicons name={searchActive ? 'close' : 'search-outline'} size={22} color={colors.text} />
+              <Ionicons
+                name={searchActive ? 'close' : 'ellipsis-horizontal'}
+                size={22}
+                color={colors.text}
+              />
             </TouchableOpacity>
           ),
         }}
@@ -528,6 +574,24 @@ function AttachmentPreview({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  headerTitleContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.sm,
+    flex: 1,
+  },
+  headerTitleTextContainer: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  headerTitle: {
+    fontSize: FontSize.md,
+    fontWeight: '700',
+  },
+  headerSubtitle: {
+    fontSize: FontSize.xs,
+    marginTop: 1,
   },
   searchBar: {
     flexDirection: 'row',

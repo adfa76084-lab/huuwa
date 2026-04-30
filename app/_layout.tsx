@@ -1,7 +1,9 @@
+import 'react-native-gesture-handler';
 import React, { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { Platform, useColorScheme } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import mobileAds from 'react-native-google-mobile-ads';
 import { setAudioModeAsync } from 'expo-audio';
 import { requestTrackingPermissionsAsync } from 'expo-tracking-transparency';
@@ -47,14 +49,17 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <SessionProvider>
-      <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
-      <Stack
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SessionProvider>
+        <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
+        <Stack
         screenOptions={{
           headerStyle: { backgroundColor: colors.background },
           headerTintColor: colors.text,
           contentStyle: { backgroundColor: colors.background },
           headerShadowVisible: false,
+          headerBackTitle: '',
+          headerBackButtonDisplayMode: 'minimal',
         }}
       >
         <Stack.Screen name="index" options={{ headerShown: false }} />
@@ -88,7 +93,8 @@ export default function RootLayout() {
           name="image-viewer"
           options={{ presentation: 'modal', headerShown: false }}
         />
-      </Stack>
-    </SessionProvider>
+        </Stack>
+      </SessionProvider>
+    </GestureHandlerRootView>
   );
 }

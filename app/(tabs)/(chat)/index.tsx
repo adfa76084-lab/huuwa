@@ -46,9 +46,9 @@ import { LoginPrompt } from '@/components/ui/LoginPrompt';
 import { FontSize, Spacing, BorderRadius } from '@/constants/theme';
 
 const AVATAR_SIZE = 64;
-const CREATE_AVATAR_SIZE = 72;
+const CREATE_AVATAR_SIZE = 64;
 const AVATAR_ITEM_WIDTH = 76;
-const CREATE_ITEM_WIDTH = 84;
+const CREATE_ITEM_WIDTH = 76;
 const PLUS_BUTTON_SIZE = 24;
 const STATUS_MAX_LENGTH = 30;
 const STATUS_BUBBLE_PLACEHOLDER = '調子はどう？';
@@ -355,7 +355,7 @@ function MessagesTab() {
                           : colors.textTertiary,
                       },
                     ]}
-                    numberOfLines={1}
+                    numberOfLines={2}
                   >
                     {user?.statusMessage || '調子はどう？'}
                   </Text>
@@ -615,6 +615,7 @@ const styles = StyleSheet.create({
   avatarRowContent: {
     paddingHorizontal: Spacing.lg,
     gap: Spacing.md,
+    alignItems: 'flex-end',
   },
   avatarItem: {
     alignItems: 'center',
@@ -632,6 +633,8 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     borderRadius: 12,
     marginBottom: 6,
+    maxWidth: 104,
+    alignSelf: 'center',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.08,
     shadowRadius: 4,
@@ -640,6 +643,7 @@ const styles = StyleSheet.create({
   speechBubbleText: {
     fontSize: FontSize.xs,
     fontWeight: '600',
+    textAlign: 'center',
   },
   speechBubbleTail: {
     position: 'absolute',
