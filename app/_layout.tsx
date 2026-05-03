@@ -2,11 +2,14 @@ import 'react-native-gesture-handler';
 import React, { useEffect } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { Platform, useColorScheme } from 'react-native';
+import { AppState, Platform, useColorScheme } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import mobileAds from 'react-native-google-mobile-ads';
 import { setAudioModeAsync } from 'expo-audio';
-import { requestTrackingPermissionsAsync } from 'expo-tracking-transparency';
+import {
+  getTrackingPermissionsAsync,
+  requestTrackingPermissionsAsync,
+} from 'expo-tracking-transparency';
 import { SessionProvider } from '@/contexts/SessionContext';
 import { useUiStore } from '@/stores/uiStore';
 import { Colors } from '@/constants/theme';
@@ -25,11 +28,28 @@ export default function RootLayout() {
     seedCategories().catch(() => {});
 
     (async () => {
-      // iOS 14.5+: request App Tracking Transparency before initializing ads
-      // so AdMob can serve personalized ads when the user opts in.
+      // iOS 14.5+: request App Tracking Transparency before initializing ads.
+      // The ATT prompt is silently dropped unless the app is already in the
+      // active state and the splash screen has been dismissed — wait for both
+      // before calling, otherwise reviewers (esp. iPadOS 26+) won't see it.
       if (Platform.OS === 'ios') {
         try {
-          await requestTrackingPermissionsAsync();
+          if (AppState.currentState !== 'active') {
+            await new Promise<void>((resolve) => {
+              const sub = AppState.addEventListener('change', (state) => {
+                if (state === 'active') {
+                  sub.remove();
+                  resolve();
+                }
+              });
+            });
+          }
+          await new Promise((r) => setTimeout(r, 500));
+
+          const { status } = await getTrackingPermissionsAsync();
+          if (status === 'undetermined') {
+            await requestTrackingPermissionsAsync();
+          }
         } catch (e) {
           console.warn('[ATT] requestTrackingPermissions failed', e);
         }
