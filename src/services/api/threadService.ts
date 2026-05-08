@@ -76,9 +76,16 @@ export async function createThread(
   const authorDoc = await getDocument<{ isPrivate?: boolean }>(Collections.USERS, uid);
   const authorIsPrivate = authorDoc?.isPrivate === true;
 
+  // Cache a short snippet of the first post on the thread doc so feed cards
+  // can show a description without an extra read per row.
+  const excerpt = form.content
+    ? form.content.replace(/\s+/g, ' ').trim().slice(0, 150)
+    : null;
+
   const threadData = {
     title: form.title,
     imageUrl: form.imageUrl ?? null,
+    excerpt,
     author: userProfile,
     authorUid: uid,
     authorIsPrivate,

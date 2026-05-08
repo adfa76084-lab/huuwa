@@ -5,7 +5,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/hooks/useThemeColors';
 import { FontSize, Spacing, BorderRadius, Shadows } from '@/constants/theme';
 import { Thread } from '@/types/thread';
-import { Avatar } from '@/components/ui/Avatar';
 import { formatFeedTime } from '@/utils/date';
 import { formatCount } from '@/utils/text';
 
@@ -18,17 +17,14 @@ interface ThreadCardProps {
   likeDelta?: number;
 }
 
-function ThreadCardComponent({ thread, onPress, onLike, onMenuPress, isLiked = false, likeDelta = 0 }: ThreadCardProps) {
+function ThreadCardComponent({ thread, onPress, onMenuPress }: ThreadCardProps) {
   const colors = useThemeColors();
 
   return (
     <TouchableOpacity
       style={[
         styles.container,
-        {
-          backgroundColor: colors.card,
-          borderColor: colors.border,
-        },
+        { backgroundColor: colors.card, borderColor: colors.border },
         Shadows.sm,
       ]}
       onPress={onPress}
@@ -37,10 +33,10 @@ function ThreadCardComponent({ thread, onPress, onLike, onMenuPress, isLiked = f
       <View style={styles.body}>
         {/* Left content */}
         <View style={styles.leftContent}>
-          {/* Author row */}
+          {/* Author + time */}
           <View style={styles.authorRow}>
             <Text
-              style={[styles.authorName, { color: colors.textSecondary }]}
+              style={[styles.authorName, { color: colors.primary }]}
               numberOfLines={1}
             >
               {thread.author.displayName}
@@ -51,21 +47,6 @@ function ThreadCardComponent({ thread, onPress, onLike, onMenuPress, isLiked = f
             >
               {formatFeedTime(thread.createdAt)}
             </Text>
-            {onMenuPress && (
-              <TouchableOpacity
-                style={styles.menuButton}
-                onPress={onMenuPress}
-                hitSlop={10}
-                activeOpacity={0.6}
-                accessibilityLabel="メニュー"
-              >
-                <Ionicons
-                  name="ellipsis-horizontal"
-                  size={16}
-                  color={colors.textTertiary}
-                />
-              </TouchableOpacity>
-            )}
           </View>
 
           {/* Title */}
@@ -73,41 +54,15 @@ function ThreadCardComponent({ thread, onPress, onLike, onMenuPress, isLiked = f
             {thread.title}
           </Text>
 
-          {/* Footer with stats */}
-          <View style={styles.footer}>
-            <View style={styles.stat}>
-              <Ionicons
-                name="chatbubbles"
-                size={14}
-                color={colors.textTertiary}
-              />
-              <Text style={[styles.statText, { color: colors.textTertiary }]}>
-                {formatCount(thread.repliesCount)}
-              </Text>
-            </View>
-            {onLike && (
-              <TouchableOpacity
-                style={styles.stat}
-                onPress={onLike}
-                activeOpacity={0.6}
-                hitSlop={8}
-              >
-                <Ionicons
-                  name={isLiked ? 'heart' : 'heart-outline'}
-                  size={14}
-                  color={isLiked ? colors.error : colors.textTertiary}
-                />
-                <Text
-                  style={[
-                    styles.statText,
-                    { color: isLiked ? colors.error : colors.textTertiary },
-                  ]}
-                >
-                  {formatCount(Math.max(0, (thread.likesCount ?? 0) + likeDelta))}
-                </Text>
-              </TouchableOpacity>
-            )}
-          </View>
+          {/* Excerpt — first-post preview */}
+          {thread.excerpt ? (
+            <Text
+              style={[styles.excerpt, { color: colors.textSecondary }]}
+              numberOfLines={2}
+            >
+              {thread.excerpt}
+            </Text>
+          ) : null}
         </View>
 
         {/* Right image */}
@@ -118,6 +73,34 @@ function ThreadCardComponent({ thread, onPress, onLike, onMenuPress, isLiked = f
             contentFit="cover"
             transition={200}
           />
+        )}
+      </View>
+
+      {/* Footer — replies count + (subtle) menu for moderation */}
+      <View style={styles.footer}>
+        <View style={styles.stat}>
+          <Ionicons name="chatbubbles" size={16} color={colors.textTertiary} />
+          <Text style={[styles.statText, { color: colors.textTertiary }]}>
+            {formatCount(thread.repliesCount)}
+          </Text>
+        </View>
+        {onMenuPress && (
+          <TouchableOpacity
+            style={styles.menuButton}
+            onPress={(e) => {
+              e.stopPropagation?.();
+              onMenuPress();
+            }}
+            hitSlop={10}
+            activeOpacity={0.6}
+            accessibilityLabel="メニュー"
+          >
+            <Ionicons
+              name="ellipsis-horizontal"
+              size={16}
+              color={colors.textTertiary}
+            />
+          </TouchableOpacity>
         )}
       </View>
     </TouchableOpacity>
@@ -140,6 +123,7 @@ const styles = StyleSheet.create({
   },
   leftContent: {
     flex: 1,
+    gap: 4,
   },
   authorRow: {
     flexDirection: 'row',
@@ -155,23 +139,28 @@ const styles = StyleSheet.create({
     fontSize: FontSize.xs,
     flexShrink: 0,
   },
-  menuButton: {
-    paddingHorizontal: 4,
-    paddingVertical: 2,
-    marginLeft: 'auto',
-  },
   title: {
     fontSize: FontSize.lg,
     fontWeight: '700',
     lineHeight: 24,
-    marginTop: 2,
     letterSpacing: 0.1,
+    marginTop: 2,
+  },
+  excerpt: {
+    fontSize: FontSize.sm,
+    lineHeight: 20,
+    marginTop: 2,
+  },
+  threadImage: {
+    width: 100,
+    height: 100,
+    borderRadius: BorderRadius.md,
   },
   footer: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.lg,
-    marginTop: Spacing.sm + 2,
+    justifyContent: 'space-between',
+    marginTop: Spacing.md,
   },
   stat: {
     flexDirection: 'row',
@@ -179,12 +168,11 @@ const styles = StyleSheet.create({
     gap: Spacing.xs,
   },
   statText: {
-    fontSize: FontSize.xs,
+    fontSize: FontSize.sm,
     fontWeight: '500',
   },
-  threadImage: {
-    width: 90,
-    height: 90,
-    borderRadius: BorderRadius.md,
+  menuButton: {
+    paddingHorizontal: 4,
+    paddingVertical: 2,
   },
 });

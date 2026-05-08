@@ -123,10 +123,12 @@ export default function CreateThreadScreen() {
 
     const tempId = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const now = Timestamp.now();
+    const excerpt = content.replace(/\s+/g, ' ').trim().slice(0, 150) || null;
     const optimisticThread: Thread = {
       id: tempId,
       title,
       imageUrl: imageUri,
+      excerpt,
       author: userProfile,
       authorUid: user.uid,
       categoryId,

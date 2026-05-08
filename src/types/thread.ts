@@ -6,6 +6,8 @@ export interface Thread {
   id: string;
   title: string;
   imageUrl: string | null;
+  /** Snippet of the thread's first reply, shown as a description preview on cards. */
+  excerpt?: string | null;
   author: UserProfile;
   authorUid: string;
   categoryId: string | null;
