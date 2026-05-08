@@ -15,6 +15,7 @@ import { Tweet } from '@/types/tweet';
 import { Thread } from '@/types/thread';
 import { TweetCard } from '@/components/tweet/TweetCard';
 import { ThreadCard } from '@/components/thread/ThreadCard';
+import { ThreadMenu, ThreadMenuTarget } from '@/components/thread/ThreadMenu';
 import { SegmentedControl } from '@/components/ui/SegmentedControl';
 import { LoadingIndicator } from '@/components/ui/LoadingIndicator';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -38,6 +39,7 @@ export default function LikesScreen() {
   const impressions = useTweetImpressions();
   const [commentTweetId, setCommentTweetId] = useState<string | null>(null);
   const [commentTweet, setCommentTweet] = useState<Tweet | null>(null);
+  const [menuTarget, setMenuTarget] = useState<ThreadMenuTarget | null>(null);
 
   const fetchAll = useCallback(async () => {
     if (!user) return;
@@ -123,11 +125,19 @@ export default function LikesScreen() {
         thread={item}
         onPress={() => router.push(`/(tabs)/(home)/thread/${item.id}`)}
         onLike={() => handleThreadLikeToggle(item.id)}
+        onMenuPress={() =>
+          setMenuTarget({
+            kind: 'thread',
+            id: item.id,
+            authorUid: item.authorUid,
+            authorUsername: item.author.username,
+          })
+        }
         isLiked={true}
         likeDelta={threadLikes.likeDelta(item.id)}
       />
     ),
-    [router, handleThreadLikeToggle],
+    [router, handleThreadLikeToggle, threadLikes],
   );
 
   if (loading) {
@@ -191,6 +201,14 @@ export default function LikesScreen() {
           setCommentTweet(null);
         }}
       />
+
+      {menuTarget && (
+        <ThreadMenu
+          target={menuTarget}
+          visible={true}
+          onClose={() => setMenuTarget(null)}
+        />
+      )}
     </View>
   );
 }

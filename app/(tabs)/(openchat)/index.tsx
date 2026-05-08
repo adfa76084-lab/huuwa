@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useMemo } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -26,7 +26,6 @@ import { useCategoryStore } from '@/stores/categoryStore';
 import { DEFAULT_CATEGORIES } from '@/constants/categories';
 import { getUserCategories } from '@/services/api/categoryService';
 import { BorderRadius, FontSize, Spacing } from '@/constants/theme';
-import { showInterstitial } from '@/services/ads/interstitialManager';
 
 const SEGMENTS = ['参加中', '探す', 'お気に入り'];
 
@@ -38,6 +37,8 @@ export default function OpenChatListScreen() {
   const selectedCategoryIds = useCategoryStore((s) => s.selectedCategoryIds);
   const favoriteIds = useChatStore((s) => s.favoriteOpenChatIds);
   const toggleFavorite = useChatStore((s) => s.toggleFavoriteOpenChat);
+  const optimisticOpenChats = useChatStore((s) => s.optimisticOpenChats);
+  const clearOptimisticOpenChats = useChatStore((s) => s.clearOptimisticOpenChats);
 
   const [allRooms, setAllRooms] = useState<ChatRoom[]>([]);
   const [myRooms, setMyRooms] = useState<ChatRoom[]>([]);
@@ -95,8 +96,24 @@ export default function OpenChatListScreen() {
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     await fetchAll();
+    clearOptimisticOpenChats();
     setRefreshing(false);
-  }, [fetchAll]);
+  }, [fetchAll, clearOptimisticOpenChats]);
+
+  // When the user has just created an open chat, jump them to "参加中" and
+  // scroll the list back to the top so the new room is the first thing they see.
+  const listScrollRef = useRef<ScrollView>(null);
+  const lastOptimisticIdRef = useRef<string | undefined>(optimisticOpenChats[0]?.id);
+  useEffect(() => {
+    const topId = optimisticOpenChats[0]?.id;
+    if (topId && topId !== lastOptimisticIdRef.current) {
+      setSelectedSegment(0);
+      requestAnimationFrame(() => {
+        listScrollRef.current?.scrollTo({ y: 0, animated: true });
+      });
+    }
+    lastOptimisticIdRef.current = topId;
+  }, [optimisticOpenChats]);
 
   // Resolve selected categories for display
   const selectedCategories = useMemo(
@@ -129,7 +146,14 @@ export default function OpenChatListScreen() {
     [selectedCategoryIds, searchQuery],
   );
 
-  const joinedRooms = useMemo(() => filterRooms(myRooms), [myRooms, filterRooms]);
+  const joinedRooms = useMemo(() => {
+    // Show just-created rooms at the top of "参加中" instantly.
+    const optimisticVisible = filterRooms(optimisticOpenChats);
+    const real = filterRooms(myRooms).filter(
+      (r) => !optimisticOpenChats.some((o) => o.id === r.id),
+    );
+    return [...optimisticVisible, ...real];
+  }, [myRooms, optimisticOpenChats, filterRooms]);
 
   const notJoinedRooms = useMemo(() => {
     const base = filterRooms(allRooms.filter((r) => !myRoomIds.has(r.id)));
@@ -278,6 +302,7 @@ export default function OpenChatListScreen() {
 
       {/* List */}
       <ScrollView
+        ref={listScrollRef}
         contentContainerStyle={styles.listContent}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
@@ -305,7 +330,7 @@ export default function OpenChatListScreen() {
 
       <FloatingActionButton
         icon="add"
-        onPress={async () => {
+        onPress={() => {
           if (!user) {
             Alert.alert(
               'ログインが必要です',
@@ -317,7 +342,6 @@ export default function OpenChatListScreen() {
             );
             return;
           }
-          await showInterstitial();
           router.push('/create-openchat');
         }}
       />

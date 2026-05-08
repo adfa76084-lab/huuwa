@@ -13,6 +13,7 @@ import {
   muteUser,
   unmuteUser,
 } from '@/services/api/userService';
+import { reportContent } from '@/services/api/reportService';
 import { IconButton } from '@/components/ui/IconButton';
 import { getUserTweets } from '@/services/api/tweetService';
 import { getUserThreads } from '@/services/api/threadService';
@@ -91,6 +92,14 @@ export default function UserProfileScreen() {
                 updateUser({
                   blockedUids: [...(currentUser.blockedUids ?? []), userId],
                 });
+                // Apple Guideline 1.2: blocking must notify the developer.
+                reportContent(
+                  currentUser.uid,
+                  'user',
+                  userId,
+                  'inappropriate',
+                  'Auto-report from block action (profile-level block).',
+                ).catch(() => {});
               }
             } catch {
               Alert.alert('エラー', '操作に失敗しました');

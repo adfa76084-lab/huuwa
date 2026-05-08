@@ -40,7 +40,7 @@ export const useUiStore = create<UiState>()(
         likes: true,
         replies: true,
         follows: true,
-        threadReplies: true,
+        threadReplies: false,
         chatMessages: true,
       },
       privacyPrefs: {

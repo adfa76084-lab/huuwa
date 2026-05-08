@@ -215,6 +215,8 @@ export default function HomeScreen() {
 
   const markTweetViewed = useFeedStore((s) => s.markTweetViewed);
   const hiddenTweetIds = useFeedStore((s) => s.hiddenTweetIds);
+  const optimisticTweets = useFeedStore((s) => s.optimisticTweets);
+  const clearOptimisticTweets = useFeedStore((s) => s.clearOptimisticTweets);
   const viewedTweetsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -251,14 +253,39 @@ export default function HomeScreen() {
     }
   }, [rankedRecommended, filteredFollowing, selectedSegment]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Prepend optimistic tweets so brand-new posts appear at the very top
+  // immediately without waiting for the network.
   const recommendedWithAds = useMemo(
-    () => interleaveAds(rankedRecommended),
-    [rankedRecommended],
+    () => interleaveAds([...optimisticTweets, ...rankedRecommended]),
+    [rankedRecommended, optimisticTweets],
   );
-  const followingWithAds = useMemo(
-    () => interleaveAds(filteredFollowing),
-    [filteredFollowing],
-  );
+  const followingWithAds = useMemo(() => {
+    const myOptimistic = optimisticTweets.filter((t) => t.authorUid === user?.uid);
+    return interleaveAds([...myOptimistic, ...filteredFollowing]);
+  }, [filteredFollowing, optimisticTweets, user?.uid]);
+
+  // Scroll the feed to the top whenever a new optimistic tweet appears, so
+  // the user sees their just-posted tweet even if they were scrolled down.
+  const recommendedListRef = useRef<FlashList<FeedItem>>(null);
+  const followingListRef = useRef<FlashList<FeedItem>>(null);
+  const lastOptimisticIdRef = useRef<string | undefined>(optimisticTweets[0]?.id);
+  useEffect(() => {
+    const topId = optimisticTweets[0]?.id;
+    if (topId && topId !== lastOptimisticIdRef.current) {
+      recommendedListRef.current?.scrollToOffset({ offset: 0, animated: true });
+      followingListRef.current?.scrollToOffset({ offset: 0, animated: true });
+    }
+    lastOptimisticIdRef.current = topId;
+  }, [optimisticTweets]);
+
+  const handleRecommendedRefresh = useCallback(async () => {
+    await recommendedQuery.refresh();
+    clearOptimisticTweets();
+  }, [recommendedQuery, clearOptimisticTweets]);
+  const handleFollowingRefresh = useCallback(async () => {
+    await followingQuery.refresh();
+    clearOptimisticTweets();
+  }, [followingQuery, clearOptimisticTweets]);
 
   const renderTweetItem = useCallback(
     ({ item }: { item: FeedItem }) => {
@@ -360,6 +387,7 @@ export default function HomeScreen() {
 
       {selectedSegment === 0 ? (
         <FlashList
+          ref={recommendedListRef}
           data={recommendedWithAds}
           renderItem={renderTweetItem}
           keyExtractor={(item) => (item.kind === 'ad' ? item.key : item.tweet.id)}
@@ -369,7 +397,7 @@ export default function HomeScreen() {
           onEndReached={() => recommendedQuery.hasMore && recommendedQuery.fetchMore()}
           onEndReachedThreshold={0.5}
           refreshControl={
-            <RefreshControl refreshing={recommendedQuery.refreshing} onRefresh={recommendedQuery.refresh} />
+            <RefreshControl refreshing={recommendedQuery.refreshing} onRefresh={handleRecommendedRefresh} />
           }
           ListHeaderComponent={<TrendingHashtags />}
           ListEmptyComponent={
@@ -392,6 +420,7 @@ export default function HomeScreen() {
         </View>
       ) : (
         <FlashList
+          ref={followingListRef}
           data={followingWithAds}
           renderItem={renderTweetItem}
           keyExtractor={(item) => (item.kind === 'ad' ? item.key : item.tweet.id)}
@@ -401,7 +430,7 @@ export default function HomeScreen() {
           refreshControl={
             <RefreshControl
               refreshing={followingQuery.refreshing}
-              onRefresh={followingQuery.refresh}
+              onRefresh={handleFollowingRefresh}
             />
           }
           ListEmptyComponent={

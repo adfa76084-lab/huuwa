@@ -119,6 +119,15 @@ export async function createThread(
   return { id: threadRef.id, ...threadData } as unknown as Thread;
 }
 
+// Pre-generate a client-side reply ID so callers can render an optimistic
+// reply with the same ID the realtime listener will deliver later — dedupe
+// becomes a simple id-equality check.
+export function generateReplyId(threadId: string): string {
+  return doc(
+    getSubcollectionRef(Collections.THREADS, threadId, Collections.THREAD_REPLIES),
+  ).id;
+}
+
 export async function addThreadReply(
   threadId: string,
   uid: string,
@@ -126,10 +135,13 @@ export async function addThreadReply(
   imageUrls: string[],
   userProfile: UserProfile,
   attachments: ReplyAttachment[] = [],
-  mentions: Mention[] = []
+  mentions: Mention[] = [],
+  replyId?: string,
 ): Promise<ThreadReply> {
-  const replyRef = doc(
-    getSubcollectionRef(Collections.THREADS, threadId, Collections.THREAD_REPLIES)
+  const id = replyId ?? generateReplyId(threadId);
+  const replyRef = getDocRef(
+    `${Collections.THREADS}/${threadId}/${Collections.THREAD_REPLIES}`,
+    id,
   );
 
   const replyData = {
@@ -157,7 +169,7 @@ export async function addThreadReply(
     sendMentionNotifications(mentions, userProfile, threadId).catch(() => {});
   }
 
-  return { id: replyRef.id, ...replyData } as unknown as ThreadReply;
+  return { id, ...replyData } as unknown as ThreadReply;
 }
 
 export function subscribeToThreadReplies(

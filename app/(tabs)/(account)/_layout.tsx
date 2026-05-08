@@ -25,6 +25,7 @@ export default function AccountLayout() {
       <Stack.Screen name="search" options={{ title: '自分の投稿を検索' }} />
       <Stack.Screen name="settings/index" options={{ title: '設定' }} />
       <Stack.Screen name="settings/account" options={{ title: 'アカウント' }} />
+      <Stack.Screen name="settings/two-factor" options={{ title: '2段階認証' }} />
       <Stack.Screen name="settings/notifications" options={{ title: '通知' }} />
       <Stack.Screen name="settings/privacy" options={{ title: 'プライバシーと安全' }} />
       <Stack.Screen name="settings/mute-block" options={{ title: 'ミュートとブロック' }} />

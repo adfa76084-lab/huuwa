@@ -25,6 +25,11 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const unsubscribe = subscribeToAuthChanges(async (fbUser) => {
+      // Set loading first so screens that gate on (firebaseUser && !profile)
+      // don't redirect mid-fetch — without this, React can re-render between
+      // setFirebaseUser and setUser and the redirect fires before the profile
+      // arrives (pushing existing users into the new-user setup screen).
+      if (fbUser) setIsLoading(true);
       setFirebaseUser(fbUser);
       if (fbUser) {
         try {
@@ -37,7 +42,8 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
           // Idempotent and silent — runs in background.
           migrateMyEmailToPrivate().catch(() => {});
           setUser(profile);
-        } catch {
+        } catch (e) {
+          console.error('[Session] profile fetch failed:', e);
           setUser(null);
         }
       } else {

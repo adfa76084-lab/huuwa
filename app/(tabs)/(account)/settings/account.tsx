@@ -562,6 +562,11 @@ export default function AccountSettingsScreen() {
       icon: 'key-outline',
       onPress: () => router.push('/(auth)/forgot-password'),
     },
+    {
+      label: '2段階認証',
+      icon: 'shield-checkmark-outline',
+      onPress: () => router.push('/(tabs)/(account)/settings/two-factor'),
+    },
   ];
 
   const dangerRows: AccountRow[] = [

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { View, StyleSheet, Alert, ScrollView, TouchableOpacity, Text, Image as RNImage } from 'react-native';
+import { Timestamp } from 'firebase/firestore';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -13,12 +14,15 @@ import { CategoryPickerModal } from '@/components/category/CategoryPickerModal';
 import { MentionSuggest } from '@/components/mention/MentionSuggest';
 import { MentionBadgeList } from '@/components/mention/MentionBadgeList';
 import { createThread } from '@/services/api/threadService';
+import { showInterstitial } from '@/services/ads/interstitialManager';
 import { uploadImage } from '@/services/firebase/storage';
 import { getUserCategories } from '@/services/api/categoryService';
 import { useCategoryStore } from '@/stores/categoryStore';
+import { useFeedStore } from '@/stores/feedStore';
 import { DEFAULT_CATEGORIES } from '@/constants/categories';
 import { Category } from '@/types/category';
 import { Mention } from '@/types/mention';
+import { Thread } from '@/types/thread';
 import { MAX_MENTIONS_PER_POST } from '@/constants/limits';
 
 export default function CreateThreadScreen() {
@@ -27,12 +31,13 @@ export default function CreateThreadScreen() {
   const { categoryId: presetCategoryId } = useLocalSearchParams<{ categoryId?: string }>();
   const { user, userProfile } = useAuth();
   const selectedCategoryIds = useCategoryStore((s) => s.selectedCategoryIds);
+  const addOptimisticThread = useFeedStore((s) => s.addOptimisticThread);
+  const removeOptimisticThread = useFeedStore((s) => s.removeOptimisticThread);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [categoryId, setCategoryId] = useState<string | null>(presetCategoryId ?? null);
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [userCategories, setUserCategories] = useState<Category[]>([]);
-  const [loading, setLoading] = useState(false);
   const [pickerVisible, setPickerVisible] = useState(false);
   const [mentions, setMentions] = useState<Mention[]>([]);
   const [cursorPosition, setCursorPosition] = useState(0);
@@ -104,7 +109,7 @@ export default function CreateThreadScreen() {
     }
   };
 
-  const handleCreate = async () => {
+  const handleCreate = () => {
     if (!title.trim()) {
       Alert.alert('エラー', 'スレッドのタイトルを入力してください。');
       return;
@@ -119,27 +124,49 @@ export default function CreateThreadScreen() {
     }
     if (!user || !userProfile) return;
 
-    setLoading(true);
-    try {
-      let uploadedImageUrl: string | null = null;
-      if (imageUri) {
-        uploadedImageUrl = await uploadImage(`thread-images/${user.uid}/${Date.now()}.jpg`, imageUri);
-      }
+    const tempId = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const now = Timestamp.now();
+    const optimisticThread: Thread = {
+      id: tempId,
+      title,
+      imageUrl: imageUri,
+      author: userProfile,
+      authorUid: user.uid,
+      categoryId,
+      repliesCount: 0,
+      lastReplyAt: now,
+      createdAt: now,
+    };
+    addOptimisticThread(optimisticThread);
 
-      await createThread(user.uid, {
-        title,
-        content,
-        categoryId,
-        imageUrl: uploadedImageUrl,
-        mentions,
-      }, userProfile);
-      router.back();
-    } catch (e) {
-      const message = e instanceof Error ? e.message : 'スレッドの作成に失敗しました。';
-      Alert.alert('エラー', message);
-    } finally {
-      setLoading(false);
-    }
+    // Captured form values so the screen can close immediately while the
+    // network call runs in the background.
+    const formSnapshot = { title, content, categoryId, imageUri, mentions: [...mentions] };
+    router.back();
+    showInterstitial().catch(() => {});
+
+    (async () => {
+      try {
+        let uploadedImageUrl: string | null = null;
+        if (formSnapshot.imageUri) {
+          uploadedImageUrl = await uploadImage(
+            `thread-images/${user.uid}/${Date.now()}.jpg`,
+            formSnapshot.imageUri,
+          );
+        }
+        await createThread(user.uid, {
+          title: formSnapshot.title,
+          content: formSnapshot.content,
+          categoryId: formSnapshot.categoryId,
+          imageUrl: uploadedImageUrl,
+          mentions: formSnapshot.mentions,
+        }, userProfile);
+      } catch (e) {
+        removeOptimisticThread(tempId);
+        const message = e instanceof Error ? e.message : 'スレッドの作成に失敗しました。';
+        Alert.alert('スレッド作成に失敗しました', message);
+      }
+    })();
   };
 
   return (
@@ -149,7 +176,6 @@ export default function CreateThreadScreen() {
         onClose={() => router.back()}
         onAction={handleCreate}
         actionLabel="作成"
-        actionLoading={loading}
         actionDisabled={!title.trim() || !content.trim() || !categoryId}
       />
       <ScrollView

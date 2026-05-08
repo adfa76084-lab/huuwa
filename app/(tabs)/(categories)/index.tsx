@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   FlatList,
 } from 'react-native';
+import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/hooks/useThemeColors';
 import { useAuth } from '@/hooks/useAuth';
@@ -60,14 +61,27 @@ export default function CategoriesScreen() {
     [defaultCategories, matches],
   );
 
-  useEffect(() => {
-    getCategories()
-      .then(setDefaultCategories)
-      .catch(() => {});
-    getUserCategories()
-      .then(setUserCategories)
-      .catch(() => {});
-  }, []);
+  // Refetch on every focus so the grid is never blank — and the seeded
+  // DEFAULT_CATEGORIES/userCategories from previous fetch keep showing while
+  // the new data is in flight.
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      getCategories()
+        .then((cats) => {
+          if (!cancelled && cats.length > 0) setDefaultCategories(cats);
+        })
+        .catch(() => {});
+      getUserCategories()
+        .then((cats) => {
+          if (!cancelled) setUserCategories(cats);
+        })
+        .catch(() => {});
+      return () => {
+        cancelled = true;
+      };
+    }, []),
+  );
 
   const handleCategorySelect = useCallback(
     (categoryId: string) => {

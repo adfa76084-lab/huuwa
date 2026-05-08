@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, Image, StyleSheet, TouchableOpacity } from 'react-native';
 import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/hooks/useThemeColors';
 import { FontSize, Spacing, BorderRadius } from '@/constants/theme';
 import { ThreadReply } from '@/types/thread';
@@ -18,9 +19,10 @@ const CONTENT_LEFT = AVATAR_SIZE + AVATAR_GAP;
 
 interface ThreadReplyCardProps {
   reply: ThreadReply;
+  onMenuPress?: () => void;
 }
 
-export function ThreadReplyCard({ reply }: ThreadReplyCardProps) {
+function ThreadReplyCardComponent({ reply, onMenuPress }: ThreadReplyCardProps) {
   const colors = useThemeColors();
   const router = useRouter();
 
@@ -41,6 +43,21 @@ export function ThreadReplyCard({ reply }: ThreadReplyCardProps) {
         <Text style={[styles.time, { color: colors.textTertiary }]}>
           {formatFeedTime(reply.createdAt)}
         </Text>
+        {onMenuPress && (
+          <TouchableOpacity
+            style={styles.menuButton}
+            onPress={onMenuPress}
+            hitSlop={10}
+            activeOpacity={0.6}
+            accessibilityLabel="メニュー"
+          >
+            <Ionicons
+              name="ellipsis-horizontal"
+              size={16}
+              color={colors.textTertiary}
+            />
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Content area — indented to align under the name */}
@@ -114,6 +131,8 @@ export function ThreadReplyCard({ reply }: ThreadReplyCardProps) {
   );
 }
 
+export const ThreadReplyCard = React.memo(ThreadReplyCardComponent);
+
 const styles = StyleSheet.create({
   container: {
     paddingHorizontal: Spacing.md,
@@ -133,6 +152,11 @@ const styles = StyleSheet.create({
   time: {
     fontSize: FontSize.sm,
     marginLeft: 2,
+    flex: 1,
+  },
+  menuButton: {
+    paddingHorizontal: 4,
+    paddingVertical: 2,
   },
   contentArea: {
     marginLeft: CONTENT_LEFT,

@@ -16,6 +16,7 @@ export default function ThreadsLayout() {
       }}
     >
       <Stack.Screen name="index" options={{ title: 'スレッド' }} />
+      <Stack.Screen name="thread/[threadId]" options={{ title: 'スレッド' }} />
     </Stack>
   );
 }

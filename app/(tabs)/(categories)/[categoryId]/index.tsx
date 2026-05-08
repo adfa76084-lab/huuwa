@@ -23,13 +23,42 @@ import { Category } from '@/types/category';
 import { PaginatedResult } from '@/types/common';
 import { TweetCard } from '@/components/tweet/TweetCard';
 import { ThreadCard } from '@/components/thread/ThreadCard';
+import { ThreadMenu, ThreadMenuTarget } from '@/components/thread/ThreadMenu';
 import { CommentBottomSheet } from '@/components/tweet/CommentBottomSheet';
 import { SegmentedControl } from '@/components/ui/SegmentedControl';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { FloatingActionButton } from '@/components/ui/FloatingActionButton';
+import { useFeedStore } from '@/stores/feedStore';
+import { FeedNativeAd } from '@/components/ads/FeedNativeAd';
+import { FEED_AD_INTERVAL } from '@/constants/ads';
 import { Spacing, FontSize, BorderRadius } from '@/constants/theme';
 
 const SEGMENTS = ['投稿', 'スレッド'];
+
+type TweetFeedItem = { kind: 'tweet'; tweet: Tweet } | { kind: 'ad'; key: string };
+type ThreadFeedItem = { kind: 'thread'; thread: Thread } | { kind: 'ad'; key: string };
+
+function interleaveTweetAds(tweets: Tweet[]): TweetFeedItem[] {
+  const result: TweetFeedItem[] = [];
+  tweets.forEach((t, idx) => {
+    result.push({ kind: 'tweet', tweet: t });
+    if ((idx + 1) % FEED_AD_INTERVAL === 0 && idx + 1 < tweets.length) {
+      result.push({ kind: 'ad', key: `ad-tweet-${idx}` });
+    }
+  });
+  return result;
+}
+
+function interleaveThreadAds(threads: Thread[]): ThreadFeedItem[] {
+  const result: ThreadFeedItem[] = [];
+  threads.forEach((t, idx) => {
+    result.push({ kind: 'thread', thread: t });
+    if ((idx + 1) % FEED_AD_INTERVAL === 0 && idx + 1 < threads.length) {
+      result.push({ kind: 'ad', key: `ad-thread-${idx}` });
+    }
+  });
+  return result;
+}
 
 function useRealtimeFeed<T extends { id: string }>(
   subscribeFn: (callback: (items: T[], lastDoc: DocumentSnapshot | null) => void) => () => void,
@@ -126,14 +155,86 @@ export default function CategoryDetailScreen() {
   const interactions = useTweetInteractions();
   const impressions = useTweetImpressions();
 
+  // Optimistic posts created from the composer surface here too, so the user
+  // sees their tweet/thread instantly without waiting for the realtime push.
+  const optimisticTweets = useFeedStore((s) => s.optimisticTweets);
+  const optimisticThreads = useFeedStore((s) => s.optimisticThreads);
+
+  const optimisticTweetsForCategory = useMemo(
+    () =>
+      optimisticTweets.filter(
+        (t) =>
+          (t.categoryIds && t.categoryIds.includes(categoryId)) ||
+          t.categoryId === categoryId,
+      ),
+    [optimisticTweets, categoryId],
+  );
+  const optimisticThreadsForCategory = useMemo(
+    () => optimisticThreads.filter((t) => t.categoryId === categoryId),
+    [optimisticThreads, categoryId],
+  );
+
+  // Dedupe: once the realtime listener delivers the real document, hide the
+  // optimistic stand-in to avoid showing two cards for the same post.
+  const realtimeTweetIds = useMemo(
+    () => new Set(tweetsQuery.items.map((t) => t.id)),
+    [tweetsQuery.items],
+  );
+  const realtimeThreadIds = useMemo(
+    () => new Set(threadsQuery.items.map((t) => t.id)),
+    [threadsQuery.items],
+  );
+  const tweetsForRender = useMemo(
+    () => [
+      ...optimisticTweetsForCategory.filter((t) => !realtimeTweetIds.has(t.id)),
+      ...tweetsQuery.items,
+    ],
+    [optimisticTweetsForCategory, tweetsQuery.items, realtimeTweetIds],
+  );
+  const threadsForRender = useMemo(
+    () => [
+      ...optimisticThreadsForCategory.filter((t) => !realtimeThreadIds.has(t.id)),
+      ...threadsQuery.items,
+    ],
+    [optimisticThreadsForCategory, threadsQuery.items, realtimeThreadIds],
+  );
+  const tweetsWithAds = useMemo(() => interleaveTweetAds(tweetsForRender), [tweetsForRender]);
+  const threadsWithAds = useMemo(() => interleaveThreadAds(threadsForRender), [threadsForRender]);
+
   useEffect(() => {
     if (tweetsQuery.items.length > 0) {
       interactions.checkTweets(tweetsQuery.items.map((t) => t.id));
     }
   }, [tweetsQuery.items]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Scroll lists back to the top whenever a new optimistic post for this
+  // category appears.
+  const tweetListRef = useRef<FlashList<TweetFeedItem>>(null);
+  const threadListRef = useRef<FlashList<ThreadFeedItem>>(null);
+  const lastOptimisticTweetIdRef = useRef<string | undefined>(
+    optimisticTweetsForCategory[0]?.id,
+  );
+  const lastOptimisticThreadIdRef = useRef<string | undefined>(
+    optimisticThreadsForCategory[0]?.id,
+  );
+  useEffect(() => {
+    const topId = optimisticTweetsForCategory[0]?.id;
+    if (topId && topId !== lastOptimisticTweetIdRef.current) {
+      tweetListRef.current?.scrollToOffset({ offset: 0, animated: true });
+    }
+    lastOptimisticTweetIdRef.current = topId;
+  }, [optimisticTweetsForCategory]);
+  useEffect(() => {
+    const topId = optimisticThreadsForCategory[0]?.id;
+    if (topId && topId !== lastOptimisticThreadIdRef.current) {
+      threadListRef.current?.scrollToOffset({ offset: 0, animated: true });
+    }
+    lastOptimisticThreadIdRef.current = topId;
+  }, [optimisticThreadsForCategory]);
+
   const [commentTweetId, setCommentTweetId] = useState<string | null>(null);
   const [commentTweet, setCommentTweet] = useState<Tweet | null>(null);
+  const [menuTarget, setMenuTarget] = useState<ThreadMenuTarget | null>(null);
 
   const handleOpenComments = useCallback((tweet: Tweet) => {
     setCommentTweet(tweet);
@@ -141,29 +242,45 @@ export default function CategoryDetailScreen() {
   }, []);
 
   const renderTweetItem = useCallback(
-    ({ item }: { item: Tweet }) => (
-      <TweetCard
-        tweet={item}
-        onPress={() => router.push(`/(tabs)/(categories)/${categoryId}/tweet/${item.id}` as any)}
-        onLike={() => interactions.handleLike(item.id)}
-        onBookmark={() => interactions.handleBookmark(item.id)}
-        onReply={() => handleOpenComments(item)}
-        isLiked={interactions.likedIds.has(item.id)}
-        isBookmarked={interactions.bookmarkedIds.has(item.id)}
-        likeDelta={interactions.likeDelta(item.id)}
-        bookmarkDelta={interactions.bookmarkDelta(item.id)}
-      />
-    ),
+    ({ item }: { item: TweetFeedItem }) => {
+      if (item.kind === 'ad') return <FeedNativeAd />;
+      const t = item.tweet;
+      return (
+        <TweetCard
+          tweet={t}
+          onPress={() => router.push(`/(tabs)/(categories)/${categoryId}/tweet/${t.id}` as any)}
+          onLike={() => interactions.handleLike(t.id)}
+          onBookmark={() => interactions.handleBookmark(t.id)}
+          onReply={() => handleOpenComments(t)}
+          isLiked={interactions.likedIds.has(t.id)}
+          isBookmarked={interactions.bookmarkedIds.has(t.id)}
+          likeDelta={interactions.likeDelta(t.id)}
+          bookmarkDelta={interactions.bookmarkDelta(t.id)}
+        />
+      );
+    },
     [router, categoryId, interactions, handleOpenComments],
   );
 
   const renderThreadItem = useCallback(
-    ({ item }: { item: Thread }) => (
-      <ThreadCard
-        thread={item}
-        onPress={() => router.push(`/(tabs)/(categories)/${categoryId}/thread/${item.id}` as any)}
-      />
-    ),
+    ({ item }: { item: ThreadFeedItem }) => {
+      if (item.kind === 'ad') return <FeedNativeAd />;
+      const t = item.thread;
+      return (
+        <ThreadCard
+          thread={t}
+          onPress={() => router.push(`/(tabs)/(categories)/${categoryId}/thread/${t.id}` as any)}
+          onMenuPress={() =>
+            setMenuTarget({
+              kind: 'thread',
+              id: t.id,
+              authorUid: t.authorUid,
+              authorUsername: t.author.username,
+            })
+          }
+        />
+      );
+    },
     [router, categoryId],
   );
 
@@ -212,9 +329,10 @@ export default function CategoryDetailScreen() {
             InlineLoading
           ) : (
             <FlashList
-              data={tweetsQuery.items}
+              ref={tweetListRef}
+              data={tweetsWithAds}
               renderItem={renderTweetItem}
-              keyExtractor={(item) => item.id}
+              keyExtractor={(item) => (item.kind === 'ad' ? item.key : item.tweet.id)}
               extraData={[interactions.likedIds, interactions.bookmarkedIds]}
               onViewableItemsChanged={impressions.onViewableItemsChanged}
               viewabilityConfig={impressions.viewabilityConfig}
@@ -238,9 +356,10 @@ export default function CategoryDetailScreen() {
             InlineLoading
           ) : (
             <FlashList
-              data={threadsQuery.items}
+              ref={threadListRef}
+              data={threadsWithAds}
               renderItem={renderThreadItem}
-              keyExtractor={(item) => item.id}
+              keyExtractor={(item) => (item.kind === 'ad' ? item.key : item.thread.id)}
               onEndReached={() => threadsQuery.hasMore && threadsQuery.fetchMore()}
               onEndReachedThreshold={0.5}
               refreshControl={
@@ -280,6 +399,14 @@ export default function CategoryDetailScreen() {
           setCommentTweet(null);
         }}
       />
+
+      {menuTarget && (
+        <ThreadMenu
+          target={menuTarget}
+          visible={true}
+          onClose={() => setMenuTarget(null)}
+        />
+      )}
     </View>
   );
 }

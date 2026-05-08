@@ -18,6 +18,7 @@ const TWILIO_ACCOUNT_SID = defineSecret('TWILIO_ACCOUNT_SID');
 const TWILIO_AUTH_TOKEN = defineSecret('TWILIO_AUTH_TOKEN');
 const TWILIO_FROM_NUMBER = defineSecret('TWILIO_FROM_NUMBER');
 const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
+const IDENTITY_TOOLKIT_API_KEY = defineSecret('IDENTITY_TOOLKIT_API_KEY');
 
 const CODE_TTL_MS = 10 * 60 * 1000;
 const RESEND_COOLDOWN_MS = 60 * 1000;
@@ -333,7 +334,9 @@ export const verifySignupAndCreate = onCall(
     if (!displayName || displayName.length > 30) {
       throw new HttpsError('invalid-argument', '表示名を入力してください (30文字以内)');
     }
-    if (!/^[a-zA-Z0-9_]{3,15}$/.test(username)) {
+    // username is optional at signup. If empty, we auto-generate one from the
+    // uid after the user is created — uniqueness is guaranteed by uid.
+    if (username && !/^[a-zA-Z0-9_]{3,15}$/.test(username)) {
       throw new HttpsError('invalid-argument', 'ユーザー名は3〜15文字の英数字またはアンダースコアで入力してください');
     }
 
@@ -374,12 +377,14 @@ export const verifySignupAndCreate = onCall(
       }
     }
 
-    const usernameQuery = await db.collection('users')
-      .where('username', '==', username)
-      .limit(1)
-      .get();
-    if (!usernameQuery.empty) {
-      throw new HttpsError('already-exists', 'このユーザー名は既に使用されています');
+    if (username) {
+      const usernameQuery = await db.collection('users')
+        .where('username', '==', username)
+        .limit(1)
+        .get();
+      if (!usernameQuery.empty) {
+        throw new HttpsError('already-exists', 'このユーザー名は既に使用されています');
+      }
     }
 
     let userRecord;
@@ -399,11 +404,15 @@ export const verifySignupAndCreate = onCall(
 
     const uid = userRecord.uid;
 
+    // Generate a uid-derived username when the user didn't pick one.
+    // Uniqueness follows from uid uniqueness.
+    const finalUsername = username || `user_${uid.slice(0, 10).replace(/[^a-zA-Z0-9_]/g, '0')}`;
+
     try {
       await db.collection('users').doc(uid).set({
         uid,
         displayName,
-        username,
+        username: finalUsername,
         avatarUrl: null,
         headerImageUrl: null,
         bio: '',
@@ -429,6 +438,224 @@ export const verifySignupAndCreate = onCall(
 
     const customToken = await admin.auth().createCustomToken(uid);
     return { ok: true, customToken, uid };
+  },
+);
+
+// ─── New-device login notification ───
+// Called by the client right after a successful sign-in. Records the device
+// fingerprint and emails the user if it's a previously unseen device.
+// The signup flow calls this with `silent: true` so the very first device
+// is recorded but doesn't trigger a notification email.
+
+export const recordLoginAndNotify = onCall(
+  { region: 'us-central1', secrets: [RESEND_API_KEY, EMAIL_FROM] },
+  async (request) => {
+    const uid = request.auth?.uid;
+    if (!uid) throw new HttpsError('unauthenticated', 'ログインが必要です');
+
+    const deviceHash = String(request.data?.deviceHash ?? '').trim();
+    const deviceLabel = String(request.data?.deviceLabel ?? '').trim().slice(0, 200);
+    const silent = request.data?.silent === true;
+
+    if (deviceHash.length < 8 || deviceHash.length > 200) {
+      throw new HttpsError('invalid-argument', '無効なデバイス情報です');
+    }
+    if (!deviceLabel) {
+      throw new HttpsError('invalid-argument', 'デバイスラベルが必要です');
+    }
+
+    const docId = sha256(deviceHash);
+    const docRef = db.collection('userPrivate').doc(uid).collection('knownDevices').doc(docId);
+    const snap = await docRef.get();
+    const now = admin.firestore.FieldValue.serverTimestamp();
+
+    if (snap.exists) {
+      await docRef.update({ lastSeenAt: now, deviceLabel });
+      return { ok: true, isNew: false, notified: false };
+    }
+
+    await docRef.set({
+      deviceLabel,
+      firstSeenAt: now,
+      lastSeenAt: now,
+    });
+
+    if (silent) {
+      return { ok: true, isNew: true, notified: false };
+    }
+
+    let email: string | null = null;
+    try {
+      const userRecord = await admin.auth().getUser(uid);
+      email = userRecord.email ?? null;
+    } catch {
+      // user record fetch failed — skip notification
+    }
+    if (!email) {
+      return { ok: true, isNew: true, notified: false };
+    }
+
+    const time = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+    const resend = new Resend(RESEND_API_KEY.value());
+    const { error } = await resend.emails.send({
+      from: EMAIL_FROM.value(),
+      to: email,
+      subject: 'huuwa 新しい端末からのログイン通知',
+      text: `huuwaへ新しい端末からログインがありました。\n\n端末: ${deviceLabel}\n日時: ${time}\n\n心当たりがある場合は、このメールは無視してください。\n心当たりがない場合は、すぐにパスワードを変更し、サポートまでご連絡ください。`,
+      html: `<p>huuwaへ<strong>新しい端末からログイン</strong>がありました。</p><table style="border-collapse:collapse;margin:8px 0"><tr><td style="padding:4px 12px 4px 0;color:#888">端末</td><td style="padding:4px 0"><strong>${deviceLabel}</strong></td></tr><tr><td style="padding:4px 12px 4px 0;color:#888">日時</td><td style="padding:4px 0">${time}</td></tr></table><p style="color:#666;font-size:13px;margin-top:16px">心当たりがある場合は、このメールは無視してください。<br>心当たりがない場合は、すぐにパスワードを変更してください。</p>`,
+    });
+
+    if (error) {
+      console.error('[recordLoginAndNotify] Resend error:', error);
+      return { ok: true, isNew: true, notified: false };
+    }
+
+    return { ok: true, isNew: true, notified: true };
+  },
+);
+
+// ─── Email-based 2FA login ───
+// initiateEmailLogin verifies email/password server-side. If the user has
+// email-2FA enabled (userPrivate.email2FA == true), it sends a 6-digit code
+// to their email and returns { requireMfa: true, uid }. Otherwise it returns
+// a custom token the client can sign in with directly. This way the Firebase
+// Auth session never partially exists — full sign-in only happens after both
+// password and (if enabled) email code are verified.
+
+export const initiateEmailLogin = onCall(
+  { region: 'us-central1', secrets: [RESEND_API_KEY, EMAIL_FROM, IDENTITY_TOOLKIT_API_KEY] },
+  async (request) => {
+    const email = String(request.data?.email ?? '').trim().toLowerCase();
+    const password = String(request.data?.password ?? '');
+
+    if (!EMAIL_RE.test(email)) {
+      throw new HttpsError('invalid-argument', '有効なメールアドレスを入力してください');
+    }
+    if (!password) {
+      throw new HttpsError('invalid-argument', 'パスワードを入力してください');
+    }
+
+    // Verify password via the Identity Toolkit REST API. The web API key is
+    // public-by-design (it's already in the client app), so this is safe.
+    const res = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${IDENTITY_TOOLKIT_API_KEY.value()}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, returnSecureToken: false }),
+      },
+    );
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const apiMsg: string = body?.error?.message ?? '';
+      if (apiMsg.startsWith('EMAIL_NOT_FOUND') || apiMsg.startsWith('INVALID_PASSWORD') || apiMsg.startsWith('INVALID_LOGIN_CREDENTIALS')) {
+        throw new HttpsError('permission-denied', 'メールアドレスまたはパスワードが正しくありません');
+      }
+      if (apiMsg.startsWith('USER_DISABLED')) {
+        throw new HttpsError('permission-denied', 'このアカウントは無効化されています');
+      }
+      if (apiMsg.startsWith('TOO_MANY_ATTEMPTS')) {
+        throw new HttpsError('resource-exhausted', '試行回数が多すぎます。しばらくしてからお試しください');
+      }
+      throw new HttpsError('internal', 'ログインに失敗しました');
+    }
+
+    const data = await res.json();
+    const uid: string = data.localId;
+
+    const privateSnap = await db.collection('userPrivate').doc(uid).get();
+    const has2FA = privateSnap.exists && privateSnap.data()?.email2FA === true;
+
+    if (!has2FA) {
+      const customToken = await admin.auth().createCustomToken(uid);
+      return { ok: true, requireMfa: false, customToken };
+    }
+
+    // Resolve the destination email (the auth record's email, not the input,
+    // in case there's a mismatch / casing issue).
+    const userRecord = await admin.auth().getUser(uid);
+    const destEmail = userRecord.email;
+    if (!destEmail) {
+      throw new HttpsError('failed-precondition', 'メールアドレスが登録されていません');
+    }
+
+    const docRef = db.collection('loginCodes').doc(uid);
+    const existing = await docRef.get();
+    if (existing.exists) {
+      const last = existing.data()?.createdAt?.toMillis?.() ?? 0;
+      if (Date.now() - last < RESEND_COOLDOWN_MS) {
+        throw new HttpsError('resource-exhausted', '再送信は1分後にお試しください');
+      }
+    }
+
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+
+    await docRef.set({
+      codeHash: sha256(code),
+      attempts: 0,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      expiresAt: admin.firestore.Timestamp.fromMillis(Date.now() + CODE_TTL_MS),
+    });
+
+    const resend = new Resend(RESEND_API_KEY.value());
+    const { error } = await resend.emails.send({
+      from: EMAIL_FROM.value(),
+      to: destEmail,
+      subject: 'huuwa ログイン認証コード',
+      text: `huuwaのログイン認証コードは ${code} です。\n\n10分以内にアプリで入力してください。\n心当たりがない場合はこのメールを無視し、すぐにパスワードを変更してください。`,
+      html: `<p>huuwaのログイン認証コードは <strong style="font-size:20px;letter-spacing:2px">${code}</strong> です。</p><p>10分以内にアプリで入力してください。</p><p style="color:#888;font-size:12px">心当たりがない場合はこのメールを無視し、すぐにパスワードを変更してください。</p>`,
+    });
+
+    if (error) {
+      await docRef.delete().catch(() => {});
+      throw new HttpsError('internal', 'メール送信に失敗しました');
+    }
+
+    return { ok: true, requireMfa: true, uid };
+  },
+);
+
+export const verifyLoginCode = onCall(
+  { region: 'us-central1' },
+  async (request) => {
+    const uid = String(request.data?.uid ?? '').trim();
+    const code = String(request.data?.code ?? '').trim();
+
+    if (!uid) {
+      throw new HttpsError('invalid-argument', 'セッションが無効です。最初からやり直してください');
+    }
+    if (!/^\d{6}$/.test(code)) {
+      throw new HttpsError('invalid-argument', '6桁のコードを入力してください');
+    }
+
+    const docRef = db.collection('loginCodes').doc(uid);
+    const snap = await docRef.get();
+    if (!snap.exists) {
+      throw new HttpsError('not-found', '認証コードが見つかりません。再送信してください');
+    }
+
+    const data = snap.data()!;
+    const expiresAt: admin.firestore.Timestamp = data.expiresAt;
+    if (expiresAt.toMillis() < Date.now()) {
+      await docRef.delete().catch(() => {});
+      throw new HttpsError('deadline-exceeded', '認証コードの有効期限が切れました');
+    }
+
+    const attempts = (data.attempts ?? 0) as number;
+    if (attempts >= MAX_ATTEMPTS) {
+      await docRef.delete().catch(() => {});
+      throw new HttpsError('resource-exhausted', '試行回数の上限に達しました。再送信してください');
+    }
+
+    if (sha256(code) !== data.codeHash) {
+      await docRef.update({ attempts: attempts + 1 });
+      throw new HttpsError('permission-denied', '認証コードが正しくありません');
+    }
+
+    await docRef.delete().catch(() => {});
+    const customToken = await admin.auth().createCustomToken(uid);
+    return { ok: true, customToken };
   },
 );
 

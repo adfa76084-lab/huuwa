@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { View, StyleSheet, Alert, ScrollView, Text, TouchableOpacity } from 'react-native';
 import { Image } from 'expo-image';
+import { Timestamp } from 'firebase/firestore';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -11,23 +12,27 @@ import { ModalHeader } from '@/components/ui/ModalHeader';
 import { TextInput } from '@/components/ui/TextInput';
 import { CategoryPickerModal } from '@/components/category/CategoryPickerModal';
 import { createChatRoom } from '@/services/api/chatService';
+import { showInterstitial } from '@/services/ads/interstitialManager';
 import { uploadImage, getStoragePath } from '@/services/firebase/storage';
 import { pickImage } from '@/services/media/imageUploader';
 import { getUserCategories } from '@/services/api/categoryService';
+import { useChatStore } from '@/stores/chatStore';
 import { DEFAULT_CATEGORIES } from '@/constants/categories';
 import { Category } from '@/types/category';
+import { ChatRoom } from '@/types/chat';
 
 export default function CreateOpenChatScreen() {
   const colors = useThemeColors();
   const router = useRouter();
   const { user, userProfile } = useAuth();
+  const addOptimisticOpenChat = useChatStore((s) => s.addOptimisticOpenChat);
+  const removeOptimisticOpenChat = useChatStore((s) => s.removeOptimisticOpenChat);
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [categoryId, setCategoryId] = useState<string | null>(null);
   const [userCategories, setUserCategories] = useState<Category[]>([]);
-  const [loading, setLoading] = useState(false);
   const [pickerVisible, setPickerVisible] = useState(false);
 
   const defaultCategories: Category[] = DEFAULT_CATEGORIES.map((c) => ({
@@ -55,36 +60,61 @@ export default function CreateOpenChatScreen() {
     if (uri) setImageUri(uri);
   };
 
-  const handleCreate = async () => {
+  const handleCreate = () => {
     if (!canCreate || !user || !userProfile) return;
 
-    setLoading(true);
-    try {
-      let imageUrl: string | undefined;
-      if (imageUri) {
-        const path = getStoragePath('openchat-images', user.uid, 'cover.jpg');
-        imageUrl = await uploadImage(path, imageUri);
-      }
+    const tempId = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const trimmedName = name.trim();
+    const trimmedDesc = description.trim();
+    const now = Timestamp.now();
+    const optimisticRoom: ChatRoom = {
+      id: tempId,
+      type: 'open',
+      name: trimmedName,
+      description: trimmedDesc || null,
+      imageUrl: imageUri,
+      categoryId: categoryId!,
+      members: [user.uid],
+      membersCount: 1,
+      memberProfiles: { [user.uid]: userProfile },
+      lastMessage: null,
+      lastMessageAt: null,
+      createdBy: user.uid,
+      createdAt: now,
+      status: 'active',
+      requestSenderUid: null,
+    };
+    addOptimisticOpenChat(optimisticRoom);
 
-      const room = await createChatRoom(
-        user.uid,
-        {
-          type: 'open',
-          name: name.trim(),
-          description: description.trim() || undefined,
-          imageUrl,
-          categoryId: categoryId!,
-          memberUids: [],
-        },
-        { [user.uid]: userProfile }
-      );
-      router.back();
-    } catch (e) {
-      const message = e instanceof Error ? e.message : 'オープンチャットの作成に失敗しました';
-      Alert.alert('エラー', message);
-    } finally {
-      setLoading(false);
-    }
+    const snapshot = { name: trimmedName, description: trimmedDesc, imageUri, categoryId };
+    router.back();
+    showInterstitial().catch(() => {});
+
+    (async () => {
+      try {
+        let imageUrl: string | undefined;
+        if (snapshot.imageUri) {
+          const path = getStoragePath('openchat-images', user.uid, 'cover.jpg');
+          imageUrl = await uploadImage(path, snapshot.imageUri);
+        }
+        await createChatRoom(
+          user.uid,
+          {
+            type: 'open',
+            name: snapshot.name,
+            description: snapshot.description || undefined,
+            imageUrl,
+            categoryId: snapshot.categoryId!,
+            memberUids: [],
+          },
+          { [user.uid]: userProfile },
+        );
+      } catch (e) {
+        removeOptimisticOpenChat(tempId);
+        const message = e instanceof Error ? e.message : 'オープンチャットの作成に失敗しました';
+        Alert.alert('オープンチャット作成に失敗しました', message);
+      }
+    })();
   };
 
   return (
@@ -94,7 +124,6 @@ export default function CreateOpenChatScreen() {
         onClose={() => router.back()}
         onAction={handleCreate}
         actionLabel="作成"
-        actionLoading={loading}
         actionDisabled={!canCreate}
       />
 

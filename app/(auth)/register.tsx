@@ -20,7 +20,6 @@ import { requestSignupCode, verifySignupAndCreate } from '@/services/firebase/au
 import {
   validateEmail,
   validatePassword,
-  validateUsername,
   validateDisplayName,
 } from '@/utils/validation';
 import { getAuthErrorMessage } from '@/utils/errorHandler';
@@ -35,19 +34,22 @@ export default function RegisterScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
-  const [username, setUsername] = useState('');
   const [code, setCode] = useState('');
   const [errors, setErrors] = useState<Record<string, string | null>>({});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [agreed, setAgreed] = useState(false);
   const codeRef = useRef<RNTextInput>(null);
 
   const handleSendCode = async () => {
+    if (!agreed) {
+      setError('利用規約とプライバシーポリシーに同意してください');
+      return;
+    }
     const fieldErrors = {
       email: validateEmail(email),
       password: validatePassword(password),
       displayName: validateDisplayName(displayName),
-      username: validateUsername(username),
     };
     setErrors(fieldErrors);
     if (Object.values(fieldErrors).some((e) => e !== null)) return;
@@ -78,7 +80,6 @@ export default function RegisterScreen() {
         code,
         password,
         displayName: displayName.trim(),
-        username: username.trim(),
       });
       router.replace('/');
     } catch (e: any) {
@@ -147,16 +148,6 @@ export default function RegisterScreen() {
               />
 
               <TextInput
-                label="ユーザー名"
-                value={username}
-                onChangeText={setUsername}
-                error={errors.username}
-                placeholder="ユーザー名を入力"
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
-
-              <TextInput
                 label="メールアドレス"
                 value={email}
                 onChangeText={setEmail}
@@ -176,7 +167,57 @@ export default function RegisterScreen() {
                 secureTextEntry
               />
 
-              <Button title="認証コードを送信" onPress={handleSendCode} loading={loading} />
+              <TouchableOpacity
+                style={styles.agreementRow}
+                onPress={() => setAgreed((v) => !v)}
+                activeOpacity={0.7}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: agreed }}
+              >
+                <View
+                  style={[
+                    styles.checkbox,
+                    {
+                      borderColor: agreed ? colors.primary : colors.border,
+                      backgroundColor: agreed ? colors.primary : 'transparent',
+                    },
+                  ]}
+                >
+                  {agreed && <Ionicons name="checkmark" size={14} color="#FFFFFF" />}
+                </View>
+                <Text style={[styles.agreementText, { color: colors.textSecondary }]}>
+                  <Text>
+                    {' '}
+                  </Text>
+                  <Text
+                    style={[styles.agreementLink, { color: colors.primary }]}
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      router.push('/(auth)/terms');
+                    }}
+                  >
+                    利用規約
+                  </Text>
+                  <Text>と</Text>
+                  <Text
+                    style={[styles.agreementLink, { color: colors.primary }]}
+                    onPress={(e) => {
+                      e.stopPropagation();
+                      router.push('/(auth)/terms');
+                    }}
+                  >
+                    プライバシーポリシー
+                  </Text>
+                  <Text>に同意します(不適切なコンテンツや虐待的な利用者への一切の容認はありません)</Text>
+                </Text>
+              </TouchableOpacity>
+
+              <Button
+                title="認証コードを送信"
+                onPress={handleSendCode}
+                loading={loading}
+                disabled={!agreed}
+              />
 
               <Button
                 title="アカウントをお持ちの方はログイン"
@@ -185,7 +226,7 @@ export default function RegisterScreen() {
                 style={styles.linkButton}
               />
 
-              <SocialAuthButtons mode="register" />
+              <SocialAuthButtons mode="register" agreed={agreed} />
             </>
           ) : (
             <>
@@ -289,6 +330,30 @@ const styles = StyleSheet.create({
   },
   linkButton: {
     marginTop: Spacing.md,
+  },
+  agreementRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingVertical: Spacing.md,
+    gap: Spacing.sm,
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 4,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 2,
+  },
+  agreementText: {
+    flex: 1,
+    fontSize: FontSize.sm,
+    lineHeight: 20,
+  },
+  agreementLink: {
+    fontWeight: '600',
+    textDecorationLine: 'underline',
   },
   header: {
     height: 48,

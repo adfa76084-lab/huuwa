@@ -9,13 +9,14 @@ import {
   TouchableOpacity,
   Alert,
 } from 'react-native';
+import { Timestamp } from 'firebase/firestore';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { FlashList } from '@shopify/flash-list';
 import { Ionicons } from '@expo/vector-icons';
 import { useThemeColors } from '@/hooks/useThemeColors';
 import { useAuth } from '@/hooks/useAuth';
 import { Spacing, FontSize, BorderRadius } from '@/constants/theme';
-import { sendMessage, subscribeToChatMessages } from '@/services/api/chatService';
+import { sendMessage, subscribeToChatMessages, generateMessageId } from '@/services/api/chatService';
 import { ChatMessage, ChatAttachment } from '@/types/chat';
 import { ChatMessageBubble } from '@/components/chat/ChatMessageBubble';
 import { ChatInput } from '@/components/chat/ChatInput';
@@ -46,8 +47,6 @@ export default function OpenChatRoomScreen() {
   const { user, userProfile } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(false);
-  const sendingRef = useRef(false);
   const pendingRef = useRef<PendingAttachment | null>(null);
   const listRef = useRef<FlashList<ChatMessage>>(null);
 
@@ -55,6 +54,12 @@ export default function OpenChatRoomScreen() {
   const [menuVisible, setMenuVisible] = useState(false);
   const [pollModalVisible, setPollModalVisible] = useState(false);
   const [pending, setPending] = useState<PendingAttachment | null>(null);
+
+  // Optimistic outgoing messages: rendered instantly with local URIs while
+  // upload + sendMessage runs in the background. The optimistic message and
+  // the eventual real document share the same client-side ID, so dedupe is
+  // a trivial id-equality check once the realtime listener delivers it.
+  const [optimisticMessages, setOptimisticMessages] = useState<ChatMessage[]>([]);
 
   // Keep refs in sync with state
   useEffect(() => { pendingRef.current = pending; }, [pending]);
@@ -68,73 +73,134 @@ export default function OpenChatRoomScreen() {
     return () => unsubscribe();
   }, [roomId, user]);
 
+  // Drop optimistic stand-ins once their real counterpart arrives via realtime.
+  useEffect(() => {
+    if (optimisticMessages.length === 0) return;
+    const realIds = new Set(messages.map((m) => m.id));
+    setOptimisticMessages((prev) => prev.filter((opt) => !realIds.has(opt.id)));
+  }, [messages]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ─── Send ───
   const handleSend = useCallback(
     async (content: string) => {
       if (!user || !userProfile || !roomId) return;
-      if (sendingRef.current) return;
-      sendingRef.current = true;
-      setSending(true);
 
       const curPending = pendingRef.current;
 
-      try {
-        let imageUrl: string | null = null;
-        const attachments: ChatAttachment[] = [];
+      // Build the optimistic message with local URIs so it renders instantly.
+      // Use the same ID we'll write to Firestore so the realtime listener
+      // can dedupe by id when it delivers the real document.
+      const messageId = generateMessageId(roomId);
+      let optimisticImageUrl: string | null = null;
+      const optimisticAttachments: ChatAttachment[] = [];
+      if (curPending) {
+        switch (curPending.kind) {
+          case 'image':
+            optimisticImageUrl = curPending.uri;
+            break;
+          case 'video':
+            optimisticAttachments.push({ type: 'video', url: curPending.uri });
+            break;
+          case 'file':
+            optimisticAttachments.push({
+              type: 'file',
+              url: curPending.file.uri,
+              name: curPending.file.name,
+              mimeType: curPending.file.mimeType,
+              sizeBytes: curPending.file.size,
+            });
+            break;
+          case 'voice':
+            optimisticAttachments.push({
+              type: 'voice',
+              url: curPending.uri,
+              durationMs: curPending.durationMs,
+            });
+            break;
+          case 'poll':
+            optimisticAttachments.push({ type: 'poll', pollId: curPending.pollId });
+            break;
+        }
+      }
+      const optimisticMsg: ChatMessage = {
+        id: messageId,
+        roomId,
+        senderUid: user.uid,
+        sender: userProfile,
+        content,
+        imageUrl: optimisticImageUrl,
+        attachments: optimisticAttachments,
+        createdAt: Timestamp.now(),
+        readBy: [user.uid],
+      };
+      setOptimisticMessages((prev) => [...prev, optimisticMsg]);
+      setPending(null);
 
-        if (curPending) {
-          switch (curPending.kind) {
-            case 'image': {
-              const path = getStoragePath('chat_images', user.uid, 'photo.jpg');
-              imageUrl = await uploadImage(path, curPending.uri);
-              break;
-            }
-            case 'video': {
-              const path = getStoragePath('chat_videos', user.uid, 'video.mp4');
-              const url = await uploadVideo(path, curPending.uri);
-              attachments.push({ type: 'video', url });
-              break;
-            }
-            case 'file': {
-              const path = getStoragePath('chat_files', user.uid, curPending.file.name);
-              const url = await uploadFile(path, curPending.file.uri);
-              attachments.push({
-                type: 'file',
-                url,
-                name: curPending.file.name,
-                mimeType: curPending.file.mimeType,
-                sizeBytes: curPending.file.size,
-              });
-              break;
-            }
-            case 'voice': {
-              const path = getStoragePath('chat_voice', user.uid, `voice_${Date.now()}.m4a`);
-              const url = await uploadVoiceWithRetry(path, curPending.uri);
-              attachments.push({
-                type: 'voice',
-                url,
-                durationMs: curPending.durationMs,
-              });
-              break;
-            }
-            case 'poll': {
-              attachments.push({ type: 'poll', pollId: curPending.pollId });
-              break;
+      // Run upload + send in the background — input stays free for the next message.
+      (async () => {
+        try {
+          let imageUrl: string | null = null;
+          const attachments: ChatAttachment[] = [];
+
+          if (curPending) {
+            switch (curPending.kind) {
+              case 'image': {
+                const path = getStoragePath('chat_images', user.uid, 'photo.jpg');
+                imageUrl = await uploadImage(path, curPending.uri);
+                break;
+              }
+              case 'video': {
+                const path = getStoragePath('chat_videos', user.uid, 'video.mp4');
+                const url = await uploadVideo(path, curPending.uri);
+                attachments.push({ type: 'video', url });
+                break;
+              }
+              case 'file': {
+                const path = getStoragePath('chat_files', user.uid, curPending.file.name);
+                const url = await uploadFile(path, curPending.file.uri);
+                attachments.push({
+                  type: 'file',
+                  url,
+                  name: curPending.file.name,
+                  mimeType: curPending.file.mimeType,
+                  sizeBytes: curPending.file.size,
+                });
+                break;
+              }
+              case 'voice': {
+                const path = getStoragePath('chat_voice', user.uid, `voice_${Date.now()}.m4a`);
+                const url = await uploadVoiceWithRetry(path, curPending.uri);
+                attachments.push({
+                  type: 'voice',
+                  url,
+                  durationMs: curPending.durationMs,
+                });
+                break;
+              }
+              case 'poll': {
+                attachments.push({ type: 'poll', pollId: curPending.pollId });
+                break;
+              }
             }
           }
-        }
 
-        await sendMessage(roomId, user.uid, userProfile, content, imageUrl, attachments);
-        setPending(null);
-      } catch (e: any) {
-        const detail = e?.code || e?.message || JSON.stringify(e);
-        Alert.alert('送信エラー', String(detail));
-      } finally {
-        sendingRef.current = false;
-        setSending(false);
-      }
+          await sendMessage(
+            roomId,
+            user.uid,
+            userProfile,
+            content,
+            imageUrl,
+            attachments,
+            messageId,
+          );
+        } catch (e: any) {
+          setOptimisticMessages((prev) => prev.filter((m) => m.id !== messageId));
+          const detail = e?.code || e?.message || JSON.stringify(e);
+          Alert.alert('送信エラー', String(detail));
+        }
+      })();
     },
-    [user, userProfile, roomId]
+    [user, userProfile, roomId],
   );
 
   // ─── Attachment handlers ───
@@ -184,6 +250,20 @@ export default function OpenChatRoomScreen() {
 
   const handleClearPending = useCallback(() => setPending(null), []);
 
+  // Real messages from Firestore + any in-flight optimistic ones we haven't
+  // matched yet. Sorting by createdAt keeps order stable when the optimistic
+  // is still ahead of its (slightly later, server-stamped) real twin.
+  const allMessages = useMemo(() => {
+    if (optimisticMessages.length === 0) return messages;
+    const combined = [...messages, ...optimisticMessages];
+    combined.sort((a, b) => {
+      const ta = a.createdAt?.toMillis?.() ?? 0;
+      const tb = b.createdAt?.toMillis?.() ?? 0;
+      return ta - tb;
+    });
+    return combined;
+  }, [messages, optimisticMessages]);
+
   // ─── Render ───
   if (!user) {
     return <LoginPrompt icon="people-outline" description="オープンチャットに参加するにはログインが必要です" />;
@@ -226,9 +306,9 @@ export default function OpenChatRoomScreen() {
       >
         <FlashList
           ref={listRef}
-          data={messages}
+          data={allMessages}
           renderItem={({ item, index }) => {
-            const prev = index > 0 ? messages[index - 1] : null;
+            const prev = index > 0 ? allMessages[index - 1] : null;
             const showSender = !prev || prev.senderUid !== item.senderUid;
             return (
               <ChatMessageBubble
@@ -240,7 +320,7 @@ export default function OpenChatRoomScreen() {
           }}
           keyExtractor={(item) => item.id}
           onContentSizeChange={() => {
-            if (messages.length > 0) {
+            if (allMessages.length > 0) {
               listRef.current?.scrollToEnd({ animated: true });
             }
           }}
@@ -258,14 +338,7 @@ export default function OpenChatRoomScreen() {
           onSend={handleSend}
           onAttach={() => setMenuVisible(true)}
           attachmentPreview={attachmentPreview}
-          disabled={sending}
-          sending={sending}
-          voiceButton={
-            <VoiceRecordButton
-              onRecorded={handleVoiceRecorded}
-              disabled={sending}
-            />
-          }
+          voiceButton={<VoiceRecordButton onRecorded={handleVoiceRecorded} />}
         />
       </KeyboardAvoidingView>
 

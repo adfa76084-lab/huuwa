@@ -68,6 +68,21 @@ export default function RootLayout() {
     })();
   }, []);
 
+  // Re-show the app-open ad whenever the user brings the app back to the
+  // foreground. The 12-hour cooldown is enforced inside showAppOpenAd, so
+  // it's a no-op if the user has been here recently.
+  useEffect(() => {
+    let prevState: string = AppState.currentState;
+    const sub = AppState.addEventListener('change', (next) => {
+      const wasBackgrounded = prevState === 'background' || prevState === 'inactive';
+      if (wasBackgrounded && next === 'active') {
+        showAppOpenAd().catch(() => {});
+      }
+      prevState = next;
+    });
+    return () => sub.remove();
+  }, []);
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SessionProvider>

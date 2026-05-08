@@ -15,32 +15,44 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { useThemeColors } from '@/hooks/useThemeColors';
 import { useAuthStore } from '@/stores/authStore';
 import { useFeedStore } from '@/stores/feedStore';
-import { Tweet } from '@/types/tweet';
-import { muteUser, blockUser } from '@/services/api/userService';
+import { blockUser } from '@/services/api/userService';
 import { reportContent, ReportReason } from '@/services/api/reportService';
-import { deleteTweet } from '@/services/api/tweetService';
 import { ReportModal } from '@/components/ui/ReportModal';
 import { FontSize, Spacing, BorderRadius } from '@/constants/theme';
 
-interface TweetMenuProps {
-  tweet: Tweet;
+export type ThreadMenuTarget =
+  | {
+      kind: 'thread';
+      id: string;
+      authorUid: string;
+      authorUsername: string;
+    }
+  | {
+      kind: 'reply';
+      id: string;
+      authorUid: string;
+      authorUsername: string;
+      onHideLocally?: () => void;
+    };
+
+interface ThreadMenuProps {
+  target: ThreadMenuTarget;
   visible: boolean;
   onClose: () => void;
-  onDeleted?: (id: string) => void;
 }
 
-export function TweetMenu({ tweet, visible, onClose, onDeleted }: TweetMenuProps) {
+export function ThreadMenu({ target, visible, onClose }: ThreadMenuProps) {
   const colors = useThemeColors();
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
   const updateUser = useAuthStore((s) => s.updateUser);
-  const hideTweet = useFeedStore((s) => s.hideTweet);
+  const hideThread = useFeedStore((s) => s.hideThread);
   const [reportOpen, setReportOpen] = useState(false);
   const [sheetMounted, setSheetMounted] = useState(true);
   const slideAnim = useRef(new Animated.Value(400)).current;
   const overlayAnim = useRef(new Animated.Value(0)).current;
 
-  const isOwn = user?.uid === tweet.authorUid;
+  const isOwn = user?.uid === target.authorUid;
 
   useEffect(() => {
     if (visible) {
@@ -71,43 +83,40 @@ export function TweetMenu({ tweet, visible, onClose, onDeleted }: TweetMenuProps
     return false;
   };
 
-  const handleNotInterested = () => {
-    hideTweet(tweet.id);
-    animateClose();
+  const hideTarget = () => {
+    if (target.kind === 'thread') {
+      hideThread(target.id);
+    } else {
+      target.onHideLocally?.();
+    }
   };
 
-  const handleMute = async () => {
-    if (!requireLogin() || !user) return;
-    try {
-      await muteUser(user.uid, tweet.authorUid);
-      updateUser({ mutedUids: [...(user.mutedUids ?? []), tweet.authorUid] });
-      hideTweet(tweet.id);
-    } catch {
-      Alert.alert('エラー', 'ミュートに失敗しました');
-    }
+  const handleNotInterested = () => {
+    hideTarget();
     animateClose();
   };
 
   const handleBlock = () => {
     if (!requireLogin() || !user) return;
-    Alert.alert('ブロック', `@${tweet.author.username} をブロックしますか?`, [
+    Alert.alert('ブロック', `@${target.authorUsername} をブロックしますか?`, [
       { text: 'キャンセル', style: 'cancel' },
       {
         text: 'ブロック',
         style: 'destructive',
         onPress: async () => {
           try {
-            await blockUser(user.uid, tweet.authorUid);
-            updateUser({ blockedUids: [...(user.blockedUids ?? []), tweet.authorUid] });
+            await blockUser(user.uid, target.authorUid);
+            updateUser({ blockedUids: [...(user.blockedUids ?? []), target.authorUid] });
             // Apple Guideline 1.2: blocking must notify the developer.
+            // Auto-file a report so the moderation team is aware of the underlying content.
             reportContent(
               user.uid,
-              'tweet',
-              tweet.id,
+              target.kind === 'thread' ? 'thread' : 'message',
+              target.id,
               'inappropriate',
-              `Auto-report from block action. Blocked user: ${tweet.authorUid}`,
+              `Auto-report from block action. Blocked user: ${target.authorUid}`,
             ).catch(() => {});
-            hideTweet(tweet.id);
+            hideTarget();
           } catch {
             Alert.alert('エラー', 'ブロックに失敗しました');
           }
@@ -119,44 +128,22 @@ export function TweetMenu({ tweet, visible, onClose, onDeleted }: TweetMenuProps
 
   const handleReport = () => {
     if (!requireLogin()) return;
+    // Dismiss the bottom sheet Modal first to avoid iOS Modal-on-Modal presentation issues
     Animated.parallel([
       Animated.timing(slideAnim, { toValue: 400, duration: 150, useNativeDriver: true }),
       Animated.timing(overlayAnim, { toValue: 0, duration: 150, useNativeDriver: true }),
     ]).start(() => {
       setSheetMounted(false);
+      // Wait for the native modal dismiss before presenting the report modal
       setTimeout(() => setReportOpen(true), 350);
     });
-  };
-
-  const handleReportClose = () => {
-    setReportOpen(false);
-    onClose();
-  };
-
-  const handleDelete = () => {
-    Alert.alert('投稿を削除', 'この投稿を削除しますか?', [
-      { text: 'キャンセル', style: 'cancel' },
-      {
-        text: '削除',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            await deleteTweet(tweet.id, tweet.authorUid);
-            hideTweet(tweet.id);
-            onDeleted?.(tweet.id);
-          } catch {
-            Alert.alert('エラー', '削除に失敗しました');
-          }
-          animateClose();
-        },
-      },
-    ]);
   };
 
   const handleReportSubmit = async (reason: ReportReason, description: string) => {
     if (!user) return;
     try {
-      await reportContent(user.uid, 'tweet', tweet.id, reason, description);
+      const targetType = target.kind === 'thread' ? 'thread' : 'message';
+      await reportContent(user.uid, targetType, target.id, reason, description);
       setReportOpen(false);
       Alert.alert(
         '送信完了',
@@ -166,6 +153,11 @@ export function TweetMenu({ tweet, visible, onClose, onDeleted }: TweetMenuProps
     } catch {
       Alert.alert('エラー', '報告の送信に失敗しました');
     }
+  };
+
+  const handleReportClose = () => {
+    setReportOpen(false);
+    onClose();
   };
 
   return (
@@ -193,25 +185,11 @@ export function TweetMenu({ tweet, visible, onClose, onDeleted }: TweetMenuProps
                 onPress={handleNotInterested}
                 borderColor={colors.border}
               />
-              {isOwn ? (
-                <MenuRow
-                  icon="trash-outline"
-                  label="削除"
-                  destructive
-                  onPress={handleDelete}
-                  borderColor={colors.border}
-                />
-              ) : (
+              {!isOwn && (
                 <>
                   <MenuRow
-                    icon="volume-mute-outline"
-                    label={`@${tweet.author.username} をミュート`}
-                    onPress={handleMute}
-                    borderColor={colors.border}
-                  />
-                  <MenuRow
                     icon="ban-outline"
-                    label={`@${tweet.author.username} をブロック`}
+                    label={`@${target.authorUsername} をブロック`}
                     destructive
                     onPress={handleBlock}
                     borderColor={colors.border}
@@ -234,7 +212,7 @@ export function TweetMenu({ tweet, visible, onClose, onDeleted }: TweetMenuProps
         visible={reportOpen}
         onClose={handleReportClose}
         onSubmit={handleReportSubmit}
-        targetType="tweet"
+        targetType={target.kind === 'thread' ? 'thread' : 'message'}
       />
     </>
   );

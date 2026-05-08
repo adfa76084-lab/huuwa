@@ -46,17 +46,25 @@ export async function getChatMessages(
   );
 }
 
+// Generate a fresh client-side message ID. Useful so the caller can show an
+// optimistic bubble with the same ID the realtime listener will eventually
+// deliver — making dedupe a trivial id-equality check.
+export function generateMessageId(roomId: string): string {
+  return doc(
+    getSubcollectionRef(Collections.CHAT_ROOMS, roomId, Collections.CHAT_MESSAGES),
+  ).id;
+}
+
 export async function sendMessage(
   roomId: string,
   senderUid: string,
   sender: UserProfile,
   content: string,
   imageUrl?: string | null,
-  attachments?: ChatAttachment[]
+  attachments?: ChatAttachment[],
+  messageId?: string,
 ): Promise<ChatMessage> {
-  const messageRef = doc(
-    getSubcollectionRef(Collections.CHAT_ROOMS, roomId, Collections.CHAT_MESSAGES)
-  );
+  const id = messageId ?? generateMessageId(roomId);
 
   const messageData = {
     roomId,
@@ -71,7 +79,7 @@ export async function sendMessage(
 
   await setDocument(
     `${Collections.CHAT_ROOMS}/${roomId}/${Collections.CHAT_MESSAGES}`,
-    messageRef.id,
+    id,
     messageData
   );
 
@@ -80,7 +88,7 @@ export async function sendMessage(
     lastMessageAt: serverTimestamp(),
   });
 
-  return { id: messageRef.id, ...messageData } as unknown as ChatMessage;
+  return { id, ...messageData } as unknown as ChatMessage;
 }
 
 export async function createChatRoom(

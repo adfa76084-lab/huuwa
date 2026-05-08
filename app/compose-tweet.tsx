@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View,
   StyleSheet,
@@ -6,9 +6,8 @@ import {
   TouchableOpacity,
   Text,
   ScrollView,
-  Animated,
-  ActivityIndicator,
 } from 'react-native';
+import { Timestamp } from 'firebase/firestore';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -21,16 +20,17 @@ import { TweetComposer } from '@/components/tweet/TweetComposer';
 import { CategoryPickerModal } from '@/components/category/CategoryPickerModal';
 import { createTweet } from '@/services/api/tweetService';
 import { createPoll } from '@/services/api/pollService';
+import { showInterstitial } from '@/services/ads/interstitialManager';
 import { getUserCategories } from '@/services/api/categoryService';
+import { extractHashtags } from '@/services/api/hashtagService';
 import { useCategoryStore } from '@/stores/categoryStore';
+import { useFeedStore } from '@/stores/feedStore';
 import { DEFAULT_CATEGORIES } from '@/constants/categories';
 import { Category } from '@/types/category';
-import { ComposeTweetForm } from '@/types/tweet';
+import { ComposeTweetForm, Tweet } from '@/types/tweet';
 import { PollCreatorModal } from '@/components/thread/PollCreatorModal';
 
 const MAX_IMAGES = 4;
-
-type PostStatus = 'idle' | 'uploading' | 'done' | 'error';
 
 export default function ComposeTweetScreen() {
   const colors = useThemeColors();
@@ -38,22 +38,17 @@ export default function ComposeTweetScreen() {
   const { categoryId: presetCategoryId } = useLocalSearchParams<{ categoryId?: string }>();
   const { user, userProfile } = useAuth();
   const selectedCategoryIds = useCategoryStore((s) => s.selectedCategoryIds);
+  const addOptimisticTweet = useFeedStore((s) => s.addOptimisticTweet);
+  const removeOptimisticTweet = useFeedStore((s) => s.removeOptimisticTweet);
   const [content, setContent] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [categoryIds, setCategoryIds] = useState<string[]>(
     presetCategoryId ? [presetCategoryId] : []
   );
   const [userCategories, setUserCategories] = useState<Category[]>([]);
-  const [loading, setLoading] = useState(false);
   const [pickerVisible, setPickerVisible] = useState(false);
   const [pollCreatorVisible, setPollCreatorVisible] = useState(false);
   const [pollId, setPollId] = useState<string | null>(null);
-
-  // Progress state
-  const [postStatus, setPostStatus] = useState<PostStatus>('idle');
-  const [progress, setProgress] = useState(0);
-  const progressAnim = useRef(new Animated.Value(0)).current;
-  const checkmarkScale = useRef(new Animated.Value(0)).current;
 
   const defaultCategories: Category[] = DEFAULT_CATEGORIES.map((c) => ({
     ...c,
@@ -104,16 +99,7 @@ export default function ComposeTweetScreen() {
     setImages((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
-  // Animate progress bar
-  useEffect(() => {
-    Animated.timing(progressAnim, {
-      toValue: progress,
-      duration: 200,
-      useNativeDriver: false,
-    }).start();
-  }, [progress, progressAnim]);
-
-  const handlePost = async (form?: ComposeTweetForm) => {
+  const handlePost = (form?: ComposeTweetForm) => {
     if (!content.trim()) {
       Alert.alert('エラー', '投稿する内容を入力してください。');
       return;
@@ -124,61 +110,50 @@ export default function ComposeTweetScreen() {
     }
     if (!user || !userProfile) return;
 
-    setLoading(true);
-    setPostStatus('uploading');
-    setProgress(0);
+    // Build optimistic tweet so it appears at the top of the feed instantly.
+    // Local image URIs render fine in <Image> until the real upload completes.
+    const tempId = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const mentions = form?.mentions ?? [];
+    const hashtags = extractHashtags(content);
+    const now = Timestamp.now();
+    const optimisticTweet: Tweet = {
+      id: tempId,
+      author: userProfile,
+      authorUid: user.uid,
+      content,
+      imageUrls: images,
+      categoryId: categoryIds[0] ?? null,
+      categoryIds,
+      parentTweetId: null,
+      pollId: pollId ?? null,
+      hashtags,
+      mentions,
+      likesCount: 0,
+      repliesCount: 0,
+      bookmarksCount: 0,
+      viewsCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    };
+    addOptimisticTweet(optimisticTweet);
 
-    // テキストのみの場合は即座に進捗を表示
-    if (images.length === 0) {
-      setProgress(50);
-    }
+    // Close the composer immediately — network call runs in the background.
+    router.back();
+    showInterstitial().catch(() => {});
 
-    try {
-      await createTweet(user.uid, {
-        content,
-        images,
-        categoryIds,
-        parentTweetId: null,
-        pollId,
-        mentions: form?.mentions,
-      }, userProfile, (p) => {
-        setProgress(p);
-      });
-
-      setProgress(100);
-      setPostStatus('done');
-
-      // Checkmark animation
-      Animated.spring(checkmarkScale, {
-        toValue: 1,
-        friction: 4,
-        tension: 100,
-        useNativeDriver: true,
-      }).start();
-
-      // Auto-close after showing success
-      setTimeout(() => {
-        router.back();
-      }, 1200);
-    } catch (e) {
-      setPostStatus('error');
+    createTweet(user.uid, {
+      content,
+      images,
+      categoryIds,
+      parentTweetId: null,
+      pollId,
+      mentions: form?.mentions,
+    }, userProfile).catch((e) => {
+      removeOptimisticTweet(tempId);
       const message = e instanceof Error ? e.message : '投稿の作成に失敗しました。';
-      Alert.alert('エラー', message, [
-        { text: 'OK', onPress: () => { setPostStatus('idle'); setLoading(false); } },
-      ]);
-    }
+      Alert.alert('投稿に失敗しました', message);
+    });
   };
-
-  const progressWidth = progressAnim.interpolate({
-    inputRange: [0, 100],
-    outputRange: ['0%', '100%'],
-  });
-
-  const statusLabel = postStatus === 'uploading'
-    ? images.length > 0
-      ? `画像をアップロード中... ${progress}%`
-      : `投稿中... ${progress}%`
-    : '投稿完了！';
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
@@ -187,7 +162,6 @@ export default function ComposeTweetScreen() {
         onClose={() => router.back()}
         onAction={handlePost}
         actionLabel="投稿"
-        actionLoading={loading}
         actionDisabled={!content.trim() || categoryIds.length === 0}
       />
       {/* Category selector — pinned right below header */}
@@ -233,47 +207,14 @@ export default function ComposeTweetScreen() {
           images={images}
           onAddImage={handleAddImage}
           onRemoveImage={handleRemoveImage}
-          onSubmit={async (form) => {
-            await handlePost(form);
+          onSubmit={(form) => {
+            handlePost(form);
           }}
-          loading={loading}
           pollId={pollId}
           onCreatePoll={() => setPollCreatorVisible(true)}
           onRemovePoll={() => setPollId(null)}
         />
       </View>
-
-      {/* Progress overlay */}
-      {postStatus !== 'idle' && (
-        <View style={styles.overlay}>
-          <View style={[styles.progressCard, { backgroundColor: colors.card }]}>
-            {postStatus === 'uploading' ? (
-              <ActivityIndicator size="large" color={colors.primary} />
-            ) : (
-              <Animated.View style={[styles.checkmarkCircle, { backgroundColor: colors.success, transform: [{ scale: checkmarkScale }] }]}>
-                <Ionicons name="checkmark" size={32} color="#FFFFFF" />
-              </Animated.View>
-            )}
-
-            <Text style={[styles.progressLabel, { color: colors.text }]}>
-              {statusLabel}
-            </Text>
-
-            {/* Progress bar */}
-            <View style={[styles.progressBarBg, { backgroundColor: colors.surfaceVariant }]}>
-              <Animated.View
-                style={[
-                  styles.progressBarFill,
-                  {
-                    backgroundColor: postStatus === 'done' ? colors.success : colors.primary,
-                    width: progressWidth,
-                  },
-                ]}
-              />
-            </View>
-          </View>
-        </View>
-      )}
 
       <CategoryPickerModal
         visible={pickerVisible}
@@ -340,43 +281,5 @@ const styles = StyleSheet.create({
   categoryChipText: {
     fontSize: FontSize.sm,
     fontWeight: '600',
-  },
-  // Progress overlay
-  overlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    zIndex: 100,
-  },
-  progressCard: {
-    width: 260,
-    alignItems: 'center',
-    paddingVertical: Spacing.xxl,
-    paddingHorizontal: Spacing.xl,
-    borderRadius: BorderRadius.lg,
-    gap: Spacing.lg,
-  },
-  checkmarkCircle: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  progressLabel: {
-    fontSize: FontSize.md,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  progressBarBg: {
-    width: '100%',
-    height: 6,
-    borderRadius: 3,
-    overflow: 'hidden',
-  },
-  progressBarFill: {
-    height: '100%',
-    borderRadius: 3,
   },
 });

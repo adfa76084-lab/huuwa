@@ -77,6 +77,8 @@ export function isNotificationEnabled(
 ): boolean {
   const key = TYPE_TO_PREF[type];
   if (!key) return true;
+  // Thread reply notifications default OFF — must be explicitly enabled by the user
+  if (key === 'threadReplies') return prefs?.threadReplies === true;
   return prefs?.[key] !== false;
 }
 

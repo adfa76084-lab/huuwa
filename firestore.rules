@@ -33,11 +33,18 @@ service cloud.firestore {
     match /passwordResetCodes/{uid}  { allow read, write: if false; }
     match /phoneAuthCodes/{id}       { allow read, write: if false; }
     match /signupCodes/{id}          { allow read, write: if false; }
+    match /loginCodes/{uid}          { allow read, write: if false; }
     match /rateLimits/{id}           { allow read, write: if false; }
 
     // Per-user private data (email, etc.) — owner only
     match /userPrivate/{userId} {
       allow read, write: if isMe(userId);
+
+      // Server-managed device fingerprints for new-device login alerts.
+      // Written exclusively by the recordLoginAndNotify Cloud Function.
+      match /knownDevices/{deviceId} {
+        allow read, write: if false;
+      }
     }
 
     // ─── Users ───

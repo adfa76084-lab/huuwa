@@ -9,16 +9,28 @@ import { Spacing, FontSize, BorderRadius } from '@/constants/theme';
 
 interface SocialAuthButtonsProps {
   mode?: 'login' | 'register';
+  agreed?: boolean;
 }
 
-export function SocialAuthButtons({ mode = 'login' }: SocialAuthButtonsProps) {
+export function SocialAuthButtons({ mode = 'login', agreed = true }: SocialAuthButtonsProps) {
   const colors = useThemeColors();
   const router = useRouter();
   const { signInWithGoogle, signInWithApple } = useSocialAuth();
   const [loadingProvider, setLoadingProvider] = useState<string | null>(null);
   const verb = mode === 'register' ? '登録' : 'ログイン';
+  const requireAgreement = mode === 'register';
+  const blocked = requireAgreement && !agreed;
+
+  const checkAgreement = () => {
+    if (blocked) {
+      Alert.alert('利用規約への同意が必要です', '登録するには利用規約とプライバシーポリシーに同意してください。');
+      return false;
+    }
+    return true;
+  };
 
   const handleGoogle = async () => {
+    if (!checkAgreement()) return;
     setLoadingProvider('google');
     try {
       const { isNewUser } = await signInWithGoogle();
@@ -31,6 +43,7 @@ export function SocialAuthButtons({ mode = 'login' }: SocialAuthButtonsProps) {
   };
 
   const handleApple = async () => {
+    if (!checkAgreement()) return;
     setLoadingProvider('apple');
     try {
       const { isNewUser } = await signInWithApple();
@@ -47,11 +60,16 @@ export function SocialAuthButtons({ mode = 'login' }: SocialAuthButtonsProps) {
   };
 
   const handlePhone = () => {
+    if (!checkAgreement()) return;
     router.push('/(auth)/phone');
   };
 
+  // Phone signup disabled until SMS provider cost makes sense at scale.
+  // Re-enable by setting this to true.
+  const PHONE_SIGNUP_ENABLED = false;
+
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, blocked && styles.dimmed]}>
       <View style={styles.divider}>
         <View style={[styles.dividerLine, { backgroundColor: colors.border }]} />
         <Text style={[styles.dividerText, { color: colors.textSecondary }]}>
@@ -65,7 +83,7 @@ export function SocialAuthButtons({ mode = 'login' }: SocialAuthButtonsProps) {
           style={[styles.button, { backgroundColor: '#000', borderColor: '#000' }]}
           onPress={handleApple}
           activeOpacity={0.8}
-          disabled={loadingProvider !== null}
+          disabled={loadingProvider !== null || blocked}
         >
           {loadingProvider === 'apple' ? (
             <ActivityIndicator color="#FFFFFF" size="small" />
@@ -84,7 +102,7 @@ export function SocialAuthButtons({ mode = 'login' }: SocialAuthButtonsProps) {
         style={[styles.button, { backgroundColor: colors.card, borderColor: colors.border }]}
         onPress={handleGoogle}
         activeOpacity={0.8}
-        disabled={loadingProvider !== null}
+        disabled={loadingProvider !== null || blocked}
       >
         {loadingProvider === 'google' ? (
           <ActivityIndicator color={colors.text} size="small" />
@@ -98,17 +116,19 @@ export function SocialAuthButtons({ mode = 'login' }: SocialAuthButtonsProps) {
         )}
       </TouchableOpacity>
 
-      <TouchableOpacity
-        style={[styles.button, { backgroundColor: colors.card, borderColor: colors.border }]}
-        onPress={handlePhone}
-        activeOpacity={0.8}
-        disabled={loadingProvider !== null}
-      >
-        <Ionicons name="call-outline" size={20} color={colors.text} />
-        <Text style={[styles.buttonText, { color: colors.text }]}>
-          電話番号で{verb}
-        </Text>
-      </TouchableOpacity>
+      {PHONE_SIGNUP_ENABLED && (
+        <TouchableOpacity
+          style={[styles.button, { backgroundColor: colors.card, borderColor: colors.border }]}
+          onPress={handlePhone}
+          activeOpacity={0.8}
+          disabled={loadingProvider !== null || blocked}
+        >
+          <Ionicons name="call-outline" size={20} color={colors.text} />
+          <Text style={[styles.buttonText, { color: colors.text }]}>
+            電話番号で{verb}
+          </Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -117,6 +137,9 @@ const styles = StyleSheet.create({
   container: {
     gap: Spacing.md,
     marginTop: Spacing.xl,
+  },
+  dimmed: {
+    opacity: 0.5,
   },
   divider: {
     flexDirection: 'row',

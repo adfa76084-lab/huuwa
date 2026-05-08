@@ -17,14 +17,29 @@ import { getThreads } from '@/services/api/threadService';
 import { Thread } from '@/types/thread';
 import { PaginatedResult } from '@/types/common';
 import { ThreadCard } from '@/components/thread/ThreadCard';
+import { ThreadMenu, ThreadMenuTarget } from '@/components/thread/ThreadMenu';
 import { FloatingActionButton } from '@/components/ui/FloatingActionButton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { SearchBar } from '@/components/ui/SearchBar';
 import { useCategoryStore } from '@/stores/categoryStore';
 import { useFeedStore } from '@/stores/feedStore';
 import { rankFeed } from '@/utils/feedRanking';
+import { FeedNativeAd } from '@/components/ads/FeedNativeAd';
+import { FEED_AD_INTERVAL } from '@/constants/ads';
 import { Spacing, FontSize } from '@/constants/theme';
-import { showInterstitial } from '@/services/ads/interstitialManager';
+
+type ThreadFeedItem = { kind: 'thread'; thread: Thread } | { kind: 'ad'; key: string };
+
+function interleaveThreadAds(threads: Thread[]): ThreadFeedItem[] {
+  const result: ThreadFeedItem[] = [];
+  threads.forEach((t, idx) => {
+    result.push({ kind: 'thread', thread: t });
+    if ((idx + 1) % FEED_AD_INTERVAL === 0 && idx + 1 < threads.length) {
+      result.push({ kind: 'ad', key: `ad-${idx}` });
+    }
+  });
+  return result;
+}
 
 function useThreadsFeed(categoryIds: string[] | undefined, deps: any[]) {
   const [items, setItems] = useState<Thread[]>([]);
@@ -96,7 +111,10 @@ export default function ThreadsScreen() {
   const query = useThreadsFeed(catFilter, [selectedCategoryIds]);
 
   const threadLikes = useThreadLikes();
+  const [menuTarget, setMenuTarget] = useState<ThreadMenuTarget | null>(null);
   const hiddenThreadIds = useFeedStore((s) => s.hiddenThreadIds);
+  const optimisticThreads = useFeedStore((s) => s.optimisticThreads);
+  const clearOptimisticThreads = useFeedStore((s) => s.clearOptimisticThreads);
   const blockedAuthorSet = useMemo(
     () => new Set([...(user?.blockedUids ?? []), ...(user?.mutedUids ?? [])]),
     [user?.blockedUids, user?.mutedUids],
@@ -113,10 +131,29 @@ export default function ThreadsScreen() {
     const filtered = query.items.filter(
       (t) => !hiddenSet.has(t.id) && !blockedAuthorSet.has(t.authorUid),
     );
-    return rankFeed(filtered as any, {
+    const rankedItems = rankFeed(filtered as any, {
       selectedCategoryIds,
     }) as Thread[];
-  }, [query.items, selectedCategoryIds, hiddenSet, blockedAuthorSet]);
+    // Optimistic threads stay at the very top until the next refresh.
+    const visibleOptimistic = optimisticThreads.filter(
+      (t) =>
+        !blockedAuthorSet.has(t.authorUid) &&
+        (selectedCategoryIds.length === 0 ||
+          (t.categoryId !== null && selectedCategoryIds.includes(t.categoryId))),
+    );
+    return [...visibleOptimistic, ...rankedItems];
+  }, [
+    query.items,
+    selectedCategoryIds,
+    hiddenSet,
+    blockedAuthorSet,
+    optimisticThreads,
+  ]);
+
+  const handleRefresh = useCallback(async () => {
+    await query.refresh();
+    clearOptimisticThreads();
+  }, [query, clearOptimisticThreads]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -128,20 +165,46 @@ export default function ThreadsScreen() {
     );
   }, [ranked, search]);
 
+  const filteredWithAds = useMemo(() => interleaveThreadAds(filtered), [filtered]);
+
+  // Scroll the list to the top whenever a new optimistic thread appears,
+  // so the user sees their just-created thread even if scrolled down.
+  const listRef = useRef<FlashList<ThreadFeedItem>>(null);
+  const lastOptimisticIdRef = useRef<string | undefined>(optimisticThreads[0]?.id);
+  useEffect(() => {
+    const topId = optimisticThreads[0]?.id;
+    if (topId && topId !== lastOptimisticIdRef.current) {
+      listRef.current?.scrollToOffset({ offset: 0, animated: true });
+    }
+    lastOptimisticIdRef.current = topId;
+  }, [optimisticThreads]);
+
   const renderItem = useCallback(
-    ({ item }: { item: Thread }) => (
-      <ThreadCard
-        thread={item}
-        onPress={() => router.push(`/(tabs)/(home)/thread/${item.id}`)}
-        onLike={() => threadLikes.handleLike(item.id)}
-        isLiked={threadLikes.likedIds.has(item.id)}
-        likeDelta={threadLikes.likeDelta(item.id)}
-      />
-    ),
+    ({ item }: { item: ThreadFeedItem }) => {
+      if (item.kind === 'ad') return <FeedNativeAd />;
+      const t = item.thread;
+      return (
+        <ThreadCard
+          thread={t}
+          onPress={() => router.push(`/(tabs)/(threads)/thread/${t.id}` as any)}
+          onLike={() => threadLikes.handleLike(t.id)}
+          onMenuPress={() =>
+            setMenuTarget({
+              kind: 'thread',
+              id: t.id,
+              authorUid: t.authorUid,
+              authorUsername: t.author.username,
+            })
+          }
+          isLiked={threadLikes.likedIds.has(t.id)}
+          likeDelta={threadLikes.likeDelta(t.id)}
+        />
+      );
+    },
     [router, threadLikes],
   );
 
-  const handleCreate = async () => {
+  const handleCreate = () => {
     if (!user) {
       Alert.alert('ログインが必要です', 'スレッドを作成するにはログインしてください', [
         { text: 'キャンセル', style: 'cancel' },
@@ -149,7 +212,6 @@ export default function ThreadsScreen() {
       ]);
       return;
     }
-    await showInterstitial();
     router.push('/create-thread' as any);
   };
 
@@ -169,13 +231,14 @@ export default function ThreadsScreen() {
         </View>
       ) : (
         <FlashList
-          data={filtered}
+          ref={listRef}
+          data={filteredWithAds}
           renderItem={renderItem}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item) => (item.kind === 'ad' ? item.key : item.thread.id)}
           onEndReached={() => query.hasMore && query.fetchMore()}
           onEndReachedThreshold={0.5}
           refreshControl={
-            <RefreshControl refreshing={query.refreshing} onRefresh={query.refresh} />
+            <RefreshControl refreshing={query.refreshing} onRefresh={handleRefresh} />
           }
           ListEmptyComponent={
             <EmptyState
@@ -188,6 +251,14 @@ export default function ThreadsScreen() {
       )}
 
       <FloatingActionButton icon="create-outline" onPress={handleCreate} />
+
+      {menuTarget && (
+        <ThreadMenu
+          target={menuTarget}
+          visible={true}
+          onClose={() => setMenuTarget(null)}
+        />
+      )}
     </View>
   );
 }

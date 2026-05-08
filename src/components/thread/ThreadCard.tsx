@@ -13,11 +13,12 @@ interface ThreadCardProps {
   thread: Thread;
   onPress?: () => void;
   onLike?: () => void;
+  onMenuPress?: () => void;
   isLiked?: boolean;
   likeDelta?: number;
 }
 
-export function ThreadCard({ thread, onPress, onLike, isLiked = false, likeDelta = 0 }: ThreadCardProps) {
+function ThreadCardComponent({ thread, onPress, onLike, onMenuPress, isLiked = false, likeDelta = 0 }: ThreadCardProps) {
   const colors = useThemeColors();
 
   return (
@@ -47,6 +48,21 @@ export function ThreadCard({ thread, onPress, onLike, isLiked = false, likeDelta
             <Text style={[styles.time, { color: colors.textTertiary }]}>
               {formatFeedTime(thread.createdAt)}
             </Text>
+            {onMenuPress && (
+              <TouchableOpacity
+                style={styles.menuButton}
+                onPress={onMenuPress}
+                hitSlop={10}
+                activeOpacity={0.6}
+                accessibilityLabel="メニュー"
+              >
+                <Ionicons
+                  name="ellipsis-horizontal"
+                  size={16}
+                  color={colors.textTertiary}
+                />
+              </TouchableOpacity>
+            )}
           </View>
 
           {/* Title */}
@@ -105,6 +121,8 @@ export function ThreadCard({ thread, onPress, onLike, isLiked = false, likeDelta
   );
 }
 
+export const ThreadCard = React.memo(ThreadCardComponent);
+
 const styles = StyleSheet.create({
   container: {
     marginHorizontal: Spacing.md,
@@ -132,6 +150,11 @@ const styles = StyleSheet.create({
   },
   time: {
     fontSize: FontSize.xs,
+    flex: 1,
+  },
+  menuButton: {
+    paddingHorizontal: 4,
+    paddingVertical: 2,
   },
   title: {
     fontSize: FontSize.lg,

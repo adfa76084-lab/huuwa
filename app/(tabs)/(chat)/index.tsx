@@ -242,16 +242,19 @@ function FeelingScreen({
 }
 
 // ─── Messages Tab ───
-function MessagesTab() {
+function MessagesTab({ visible }: { visible: boolean }) {
   const colors = useThemeColors();
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
   const pinnedChatIds = useChatStore((s) => s.pinnedChatIds);
   const togglePinChat = useChatStore((s) => s.togglePinChat);
   const updateUser = useAuthStore((s) => s.updateUser);
-  const [rooms, setRooms] = useState<ChatRoom[]>([]);
-  const [requestCount, setRequestCount] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const rooms = useChatStore((s) => s.rooms);
+  const setRoomsStore = useChatStore((s) => s.setRooms);
+  const requestCount = useChatStore((s) => s.requestCount);
+  const setRequestCountStore = useChatStore((s) => s.setRequestCount);
+  const hasFetchedRooms = useChatStore((s) => s.hasFetchedRooms);
+  const setHasFetchedRooms = useChatStore((s) => s.setHasFetchedRooms);
   const [refreshing, setRefreshing] = useState(false);
   const [statusModalVisible, setStatusModalVisible] = useState(false);
 
@@ -267,25 +270,28 @@ function MessagesTab() {
   }, [rooms, pinnedChatIds]);
 
   const fetchRooms = useCallback(async () => {
-    if (!user) return;
+    if (!user) {
+      setHasFetchedRooms(true);
+      return;
+    }
     try {
       const [data, requests] = await Promise.all([
         getChatRooms(user.uid),
         getMessageRequests(user.uid),
       ]);
-      setRooms(data);
-      setRequestCount(requests.length);
+      setRoomsStore(data);
+      setRequestCountStore(requests.length);
     } catch {
-      // silently fail
+      // silently fail — keep showing previously cached rooms
     } finally {
-      setLoading(false);
+      setHasFetchedRooms(true);
     }
-  }, [user]);
+  }, [user, setRoomsStore, setRequestCountStore, setHasFetchedRooms]);
 
   useFocusEffect(
     useCallback(() => {
-      fetchRooms();
-    }, [fetchRooms])
+      if (visible) fetchRooms();
+    }, [fetchRooms, visible])
   );
 
   const handleRefresh = async () => {
@@ -445,7 +451,9 @@ function MessagesTab() {
     [user, updateUser],
   );
 
-  if (loading) {
+  // Only show the spinner on first-ever fetch when we have no cached rooms.
+  // Subsequent refetches keep showing stale data so the screen never goes blank.
+  if (!hasFetchedRooms && rooms.length === 0) {
     return <LoadingIndicator fullScreen />;
   }
 
@@ -486,12 +494,14 @@ function ActivityTab() {
   const router = useRouter();
   const user = useAuthStore((s) => s.user);
   const { notifications, setNotifications, setUnreadCount, markRead } = useNotificationStore();
-  const [loading, setLoading] = useState(true);
+  const [hasReceivedSnapshot, setHasReceivedSnapshot] = useState(false);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setHasReceivedSnapshot(true);
+      return;
+    }
 
-    setLoading(true);
     const unsubscribe: Unsubscribe = subscribeToQuery<AppNotification>(
       Collections.NOTIFICATIONS,
       [where('recipientUid', '==', user.uid), orderBy('createdAt', 'desc'), limit(100)],
@@ -502,7 +512,7 @@ function ActivityTab() {
         setNotifications(filtered);
         const unreadCount = filtered.filter((n) => !n.read).length;
         setUnreadCount(unreadCount);
-        setLoading(false);
+        setHasReceivedSnapshot(true);
       },
     );
 
@@ -550,7 +560,9 @@ function ActivityTab() {
     [handleNotificationPress],
   );
 
-  if (loading) {
+  // Show stale notifications on remount; only the very first load (no cached
+  // notifications and no snapshot yet) gets the spinner.
+  if (!hasReceivedSnapshot && notifications.length === 0) {
     return <LoadingIndicator fullScreen />;
   }
 
@@ -596,9 +608,21 @@ export default function ChatListScreen() {
     return <LoginPrompt icon="chatbubbles-outline" description="メッセージを送受信するにはログインが必要です" />;
   }
 
+  // Keep both tabs mounted so switching segments never re-fetches/flashes blank.
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {selectedTab === 0 ? <MessagesTab /> : <ActivityTab />}
+      <View
+        style={[styles.tabPane, selectedTab === 0 ? null : styles.tabPaneHidden]}
+        pointerEvents={selectedTab === 0 ? 'auto' : 'none'}
+      >
+        <MessagesTab visible={selectedTab === 0} />
+      </View>
+      <View
+        style={[styles.tabPane, selectedTab === 1 ? null : styles.tabPaneHidden]}
+        pointerEvents={selectedTab === 1 ? 'auto' : 'none'}
+      >
+        <ActivityTab />
+      </View>
     </View>
   );
 }
@@ -606,6 +630,12 @@ export default function ChatListScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  tabPane: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  tabPaneHidden: {
+    opacity: 0,
   },
   // Avatar row
   avatarRow: {

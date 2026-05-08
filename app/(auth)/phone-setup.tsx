@@ -17,11 +17,10 @@ import { TextInput } from '@/components/ui/TextInput';
 import { Button } from '@/components/ui/Button';
 import {
   createUserProfile,
-  isUsernameTaken,
   getUserProfile,
 } from '@/services/api/userService';
 import { auth } from '@/services/firebase/config';
-import { validateUsername, validateDisplayName } from '@/utils/validation';
+import { validateDisplayName } from '@/utils/validation';
 
 export default function PhoneSetupScreen() {
   const colors = useThemeColors();
@@ -29,7 +28,6 @@ export default function PhoneSetupScreen() {
   const setUser = useAuthStore((s) => s.setUser);
 
   const [displayName, setDisplayName] = useState('');
-  const [username, setUsername] = useState('');
   const [errors, setErrors] = useState<Record<string, string | null>>({});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -43,7 +41,6 @@ export default function PhoneSetupScreen() {
 
     const fieldErrors = {
       displayName: validateDisplayName(displayName),
-      username: validateUsername(username),
     };
     setErrors(fieldErrors);
     if (Object.values(fieldErrors).some((e) => e !== null)) return;
@@ -51,18 +48,25 @@ export default function PhoneSetupScreen() {
     setLoading(true);
     setError(null);
     try {
-      // Check username uniqueness
-      if (await isUsernameTaken(username.trim(), fbUser.uid)) {
-        setErrors({ ...fieldErrors, username: 'このユーザー名は既に使われています' });
-        setLoading(false);
+      // Defensive: if a profile already exists, do NOT overwrite it.
+      // createUserProfile uses setDoc (full overwrite), which would wipe out
+      // bio/counters/etc. for an existing user that ended up here by mistake.
+      const existing = await getUserProfile(fbUser.uid);
+      if (existing) {
+        setUser(existing);
+        router.replace('/');
         return;
       }
+
+      // Auto-generate username from uid — uniqueness guaranteed by uid uniqueness.
+      // The user can change it later from profile settings.
+      const autoUsername = `user_${fbUser.uid.slice(0, 10).replace(/[^a-zA-Z0-9_]/g, '0')}`;
 
       await createUserProfile(
         fbUser.uid,
         fbUser.email ?? '',
         displayName.trim(),
-        username.trim(),
+        autoUsername,
       );
 
       // Hydrate the Zustand store so the app tree re-renders as logged-in
@@ -92,7 +96,7 @@ export default function PhoneSetupScreen() {
             プロフィールを設定
           </Text>
           <Text style={[styles.description, { color: colors.textSecondary }]}>
-            表示名とユーザー名を設定して始めましょう。後で変更できます。
+            表示名を設定して始めましょう。後で変更できます。
           </Text>
 
           {error && (
@@ -106,15 +110,6 @@ export default function PhoneSetupScreen() {
             onChangeText={setDisplayName}
             error={errors.displayName}
             placeholder="ニックネームを入力してください"
-          />
-
-          <TextInput
-            value={username}
-            onChangeText={(t) => setUsername(t.replace(/\s+/g, ''))}
-            error={errors.username}
-            placeholder="ユーザー名"
-            autoCapitalize="none"
-            autoCorrect={false}
           />
 
           <Button
