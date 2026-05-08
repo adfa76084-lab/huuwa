@@ -185,6 +185,14 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       setFocusKey((k) => k + 1);
+      // After the composer modal closes and home regains focus, snap the feed
+      // to the top so the just-posted optimistic tweet is the first thing the
+      // user sees — not whatever scroll position they had before posting.
+      const hasOptimistic = useFeedStore.getState().optimisticTweets.length > 0;
+      if (hasOptimistic) {
+        recommendedListRef.current?.scrollToOffset({ offset: 0, animated: false });
+        followingListRef.current?.scrollToOffset({ offset: 0, animated: false });
+      }
     }, []),
   );
 
@@ -272,8 +280,8 @@ export default function HomeScreen() {
   useEffect(() => {
     const topId = optimisticTweets[0]?.id;
     if (topId && topId !== lastOptimisticIdRef.current) {
-      recommendedListRef.current?.scrollToOffset({ offset: 0, animated: true });
-      followingListRef.current?.scrollToOffset({ offset: 0, animated: true });
+      recommendedListRef.current?.scrollToOffset({ offset: 0, animated: false });
+      followingListRef.current?.scrollToOffset({ offset: 0, animated: false });
     }
     lastOptimisticIdRef.current = topId;
   }, [optimisticTweets]);

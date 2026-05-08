@@ -220,14 +220,14 @@ export default function CategoryDetailScreen() {
   useEffect(() => {
     const topId = optimisticTweetsForCategory[0]?.id;
     if (topId && topId !== lastOptimisticTweetIdRef.current) {
-      tweetListRef.current?.scrollToOffset({ offset: 0, animated: true });
+      tweetListRef.current?.scrollToOffset({ offset: 0, animated: false });
     }
     lastOptimisticTweetIdRef.current = topId;
   }, [optimisticTweetsForCategory]);
   useEffect(() => {
     const topId = optimisticThreadsForCategory[0]?.id;
     if (topId && topId !== lastOptimisticThreadIdRef.current) {
-      threadListRef.current?.scrollToOffset({ offset: 0, animated: true });
+      threadListRef.current?.scrollToOffset({ offset: 0, animated: false });
     }
     lastOptimisticThreadIdRef.current = topId;
   }, [optimisticThreadsForCategory]);

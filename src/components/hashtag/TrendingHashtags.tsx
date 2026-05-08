@@ -17,7 +17,10 @@ export function TrendingHashtags() {
     return unsub;
   }, []);
 
-  if (hashtags.length === 0) return null;
+  // Always render the same outer element — switching between `null` and a
+  // tall component as a FlashList ListHeaderComponent leaves stale measured
+  // heights, which surface as a phantom black gap above the first post.
+  if (hashtags.length === 0) return <View />;
 
   return (
     <View style={[styles.container, { backgroundColor: colors.surface, borderColor: colors.border }]}>

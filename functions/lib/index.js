@@ -341,9 +341,34 @@ exports.verifySignupAndCreate = (0, https_1.onCall)({ region: 'us-central1' }, a
         throw new https_1.HttpsError('internal', 'アカウントの作成に失敗しました');
     }
     const uid = userRecord.uid;
-    // Generate a uid-derived username when the user didn't pick one.
-    // Uniqueness follows from uid uniqueness.
-    const finalUsername = username || `user_${uid.slice(0, 10).replace(/[^a-zA-Z0-9_]/g, '0')}`;
+    // Generate a sequential username (user_1, user_2, ...) when the user
+    // didn't pick one — TikTok-style. Uses an atomic counter doc so two
+    // concurrent signups never collide. Falls back to a uid-derived username
+    // in the very unlikely case of a clash with a user-picked username.
+    let finalUsername = username;
+    if (!finalUsername) {
+        try {
+            const counterRef = db.collection('metadata').doc('userCounter');
+            const newCount = await db.runTransaction(async (tx) => {
+                const snap = await tx.get(counterRef);
+                const current = (snap.exists ? (snap.data()?.count ?? 0) : 0);
+                const next = current + 1;
+                tx.set(counterRef, { count: next }, { merge: true });
+                return next;
+            });
+            const candidate = `user_${newCount}`;
+            const existing = await db.collection('users')
+                .where('username', '==', candidate)
+                .limit(1)
+                .get();
+            finalUsername = existing.empty
+                ? candidate
+                : `user_${uid.slice(0, 10).replace(/[^a-zA-Z0-9_]/g, '0')}`;
+        }
+        catch {
+            finalUsername = `user_${uid.slice(0, 10).replace(/[^a-zA-Z0-9_]/g, '0')}`;
+        }
+    }
     try {
         await db.collection('users').doc(uid).set({
             uid,

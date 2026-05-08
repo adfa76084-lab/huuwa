@@ -1,4 +1,4 @@
-import { serverTimestamp, increment, deleteDoc } from 'firebase/firestore';
+import { serverTimestamp, increment, deleteDoc, Unsubscribe } from 'firebase/firestore';
 import { Category } from '@/types/category';
 import { Collections } from '@/constants/firestore';
 import {
@@ -10,6 +10,7 @@ import {
   getCollectionRef,
   getDocRef,
   createBatch,
+  subscribeToQuery,
   where,
   orderBy,
   doc,
@@ -48,6 +49,27 @@ export async function getUserCategories(): Promise<Category[]> {
     50
   );
   return result.items.sort((a, b) => (a.name ?? '').localeCompare(b.name ?? ''));
+}
+
+/**
+ * Realtime subscription for user-created categories. Use this in the post
+ * composer / thread / openchat creation screens so the picker reflects new
+ * categories the moment they're created elsewhere — no need to reopen the
+ * modal.
+ */
+export function subscribeToUserCategories(
+  callback: (categories: Category[]) => void,
+): Unsubscribe {
+  return subscribeToQuery<Category>(
+    Collections.CATEGORIES,
+    [where('type', '==', 'user')],
+    (items, _lastDoc) => {
+      const sorted = [...items].sort((a, b) =>
+        (a.name ?? '').localeCompare(b.name ?? ''),
+      );
+      callback(sorted);
+    },
+  );
 }
 
 export async function createUserCategory(

@@ -45,7 +45,10 @@ function ThreadCardComponent({ thread, onPress, onLike, onMenuPress, isLiked = f
             >
               {thread.author.displayName}
             </Text>
-            <Text style={[styles.time, { color: colors.textTertiary }]}>
+            <Text
+              style={[styles.time, { color: colors.textTertiary }]}
+              numberOfLines={1}
+            >
               {formatFeedTime(thread.createdAt)}
             </Text>
             {onMenuPress && (
@@ -150,11 +153,12 @@ const styles = StyleSheet.create({
   },
   time: {
     fontSize: FontSize.xs,
-    flex: 1,
+    flexShrink: 0,
   },
   menuButton: {
     paddingHorizontal: 4,
     paddingVertical: 2,
+    marginLeft: 'auto',
   },
   title: {
     fontSize: FontSize.lg,

@@ -109,7 +109,7 @@ export default function OpenChatListScreen() {
     if (topId && topId !== lastOptimisticIdRef.current) {
       setSelectedSegment(0);
       requestAnimationFrame(() => {
-        listScrollRef.current?.scrollTo({ y: 0, animated: true });
+        listScrollRef.current?.scrollTo({ y: 0, animated: false });
       });
     }
     lastOptimisticIdRef.current = topId;

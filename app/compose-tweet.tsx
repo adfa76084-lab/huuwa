@@ -21,9 +21,8 @@ import { CategoryPickerModal } from '@/components/category/CategoryPickerModal';
 import { createTweet } from '@/services/api/tweetService';
 import { createPoll } from '@/services/api/pollService';
 import { showInterstitial } from '@/services/ads/interstitialManager';
-import { getUserCategories } from '@/services/api/categoryService';
+import { subscribeToUserCategories } from '@/services/api/categoryService';
 import { extractHashtags } from '@/services/api/hashtagService';
-import { useCategoryStore } from '@/stores/categoryStore';
 import { useFeedStore } from '@/stores/feedStore';
 import { DEFAULT_CATEGORIES } from '@/constants/categories';
 import { Category } from '@/types/category';
@@ -37,7 +36,6 @@ export default function ComposeTweetScreen() {
   const router = useRouter();
   const { categoryId: presetCategoryId } = useLocalSearchParams<{ categoryId?: string }>();
   const { user, userProfile } = useAuth();
-  const selectedCategoryIds = useCategoryStore((s) => s.selectedCategoryIds);
   const addOptimisticTweet = useFeedStore((s) => s.addOptimisticTweet);
   const removeOptimisticTweet = useFeedStore((s) => s.removeOptimisticTweet);
   const [content, setContent] = useState('');
@@ -56,15 +54,14 @@ export default function ComposeTweetScreen() {
     membersCount: 0,
   }));
   const allCategories = [...defaultCategories, ...userCategories];
-  // Homeで選択中のカテゴリーのみ表示（未選択なら全カテゴリー）
-  const categories = selectedCategoryIds.length > 0
-    ? allCategories.filter((c) => selectedCategoryIds.includes(c.id))
-    : allCategories;
+  // Always show every category (defaults + all user-created) in the composer
+  // so users can post to categories they made, even if they haven't joined
+  // them as feed filters on Home.
+  const categories = allCategories;
 
   useEffect(() => {
-    getUserCategories()
-      .then(setUserCategories)
-      .catch(() => {});
+    const unsub = subscribeToUserCategories(setUserCategories);
+    return unsub;
   }, []);
 
   const selectedCategories = useMemo(

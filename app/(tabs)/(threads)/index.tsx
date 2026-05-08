@@ -174,7 +174,7 @@ export default function ThreadsScreen() {
   useEffect(() => {
     const topId = optimisticThreads[0]?.id;
     if (topId && topId !== lastOptimisticIdRef.current) {
-      listRef.current?.scrollToOffset({ offset: 0, animated: true });
+      listRef.current?.scrollToOffset({ offset: 0, animated: false });
     }
     lastOptimisticIdRef.current = topId;
   }, [optimisticThreads]);

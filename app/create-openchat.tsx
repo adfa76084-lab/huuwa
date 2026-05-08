@@ -15,7 +15,7 @@ import { createChatRoom } from '@/services/api/chatService';
 import { showInterstitial } from '@/services/ads/interstitialManager';
 import { uploadImage, getStoragePath } from '@/services/firebase/storage';
 import { pickImage } from '@/services/media/imageUploader';
-import { getUserCategories } from '@/services/api/categoryService';
+import { subscribeToUserCategories } from '@/services/api/categoryService';
 import { useChatStore } from '@/stores/chatStore';
 import { DEFAULT_CATEGORIES } from '@/constants/categories';
 import { Category } from '@/types/category';
@@ -43,9 +43,8 @@ export default function CreateOpenChatScreen() {
   const allCategories = [...defaultCategories, ...userCategories];
 
   useEffect(() => {
-    getUserCategories()
-      .then(setUserCategories)
-      .catch(() => {});
+    const unsub = subscribeToUserCategories(setUserCategories);
+    return unsub;
   }, []);
 
   const selectedCategory = useMemo(

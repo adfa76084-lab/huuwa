@@ -16,8 +16,7 @@ import { MentionBadgeList } from '@/components/mention/MentionBadgeList';
 import { createThread } from '@/services/api/threadService';
 import { showInterstitial } from '@/services/ads/interstitialManager';
 import { uploadImage } from '@/services/firebase/storage';
-import { getUserCategories } from '@/services/api/categoryService';
-import { useCategoryStore } from '@/stores/categoryStore';
+import { subscribeToUserCategories } from '@/services/api/categoryService';
 import { useFeedStore } from '@/stores/feedStore';
 import { DEFAULT_CATEGORIES } from '@/constants/categories';
 import { Category } from '@/types/category';
@@ -30,7 +29,6 @@ export default function CreateThreadScreen() {
   const router = useRouter();
   const { categoryId: presetCategoryId } = useLocalSearchParams<{ categoryId?: string }>();
   const { user, userProfile } = useAuth();
-  const selectedCategoryIds = useCategoryStore((s) => s.selectedCategoryIds);
   const addOptimisticThread = useFeedStore((s) => s.addOptimisticThread);
   const removeOptimisticThread = useFeedStore((s) => s.removeOptimisticThread);
   const [title, setTitle] = useState('');
@@ -48,14 +46,13 @@ export default function CreateThreadScreen() {
     membersCount: 0,
   }));
   const allCategories = [...defaultCategories, ...userCategories];
-  const categories = selectedCategoryIds.length > 0
-    ? allCategories.filter((c) => selectedCategoryIds.includes(c.id))
-    : allCategories;
+  // Always show every category (defaults + all user-created) so users can
+  // post to categories they made, even if they aren't joined on Home.
+  const categories = allCategories;
 
   useEffect(() => {
-    getUserCategories()
-      .then(setUserCategories)
-      .catch(() => {});
+    const unsub = subscribeToUserCategories(setUserCategories);
+    return unsub;
   }, []);
 
   const selectedCategory = categories.find((c) => c.id === categoryId);
