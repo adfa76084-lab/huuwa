@@ -1,0 +1,4 @@
+# Replace this placeholder with the entry shown in AdMob:
+# AdMob console → Apps → huuwa → app-ads.txt tab → copy the line
+# Example format (DO NOT use this — get your real entry from AdMob):
+# google.com, pub-XXXXXXXXXXXXXXXX, DIRECT, f08c47fec0942fa0
